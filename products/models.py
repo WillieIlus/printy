@@ -10,6 +10,8 @@ from core.models import PrintCompany
 from papers.models import PaperType, FinalPaperSize
 from machines.models import Machine
 
+import math
+
 
 class ProductImage(models.Model):
     """
