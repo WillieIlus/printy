@@ -5,44 +5,8 @@ from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 from core.models import PrintCompany
 
-from papers.models import FinalPaperSize
+from papers.models import ProductionPaperSize
 
-
-class ServiceCategory(models.Model):
-    """
-    A high-level category of service that a print company can offer,
-    used for filtering and finding similar companies.
-    e.g., 'Digital Printing', 'Offset Printing', 'Book Binding'.
-    """
-    name = models.CharField(
-        max_length=100,
-        unique=True,
-        help_text=_("The name of the service category (e.g., 'Screen Printing').")
-    )
-    slug = models.SlugField(
-        max_length=100,
-        unique=True,
-        blank=True,
-        help_text=_("A URL-friendly version of the name (auto-generated).")
-    )
-    description = models.TextField(
-        blank=True,
-        null=True,
-        help_text=_("A brief description of what this service category entails.")
-    )
-
-    class Meta:
-        verbose_name = _("Service Category")
-        verbose_name_plural = _("Service Categories")
-        ordering = ['name']
-
-    def save(self, *args, **kwargs):
-        if not self.slug:
-            self.slug = slugify(self.name)
-        super().save(*args, **kwargs)
-
-    def __str__(self):
-        return self.name
     
 class MachineType(models.TextChoices):
     DIGITAL = "DIGITAL", _("Digital Press")
@@ -70,7 +34,7 @@ class Machine(models.Model):
     name = models.CharField(max_length=100, help_text=_("A recognizable name for the machine, e.g., 'HP Indigo' or 'Main Laminator'."))
     machine_type = models.CharField(max_length=50, choices=MachineType.choices, default=MachineType.DIGITAL)
     supported_sizes = models.ManyToManyField(
-        FinalPaperSize,
+        ProductionPaperSize,
         related_name="supported_machines",
         blank=True,
         verbose_name=_("Supported standard sizes")

@@ -51,6 +51,7 @@ class User(AbstractBaseUser, PermissionsMixin):
         COMPANY_OWNER = 'company_owner', _('Company Owner')
         COMPANY_ADMIN = 'company_admin', _('Company Admin')
         STAFF = 'staff', _('Staff')
+        DESIGNER = 'designer', _('Designer')
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(_('email address'), unique=True)
@@ -78,7 +79,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     )
 
     # Optional profile info
-    phone_number = models.CharField(max_length=25, blank=True, null=True)
+    phone_number = models.CharField(_('phone number'), max_length=25, blank=True, null=True, help_text=_('Optional'))
     
     # Fields required for Django's auth system
     USERNAME_FIELD = 'email'
@@ -116,49 +117,4 @@ class User(AbstractBaseUser, PermissionsMixin):
             self.UserType.COMPANY_ADMIN,
             self.UserType.STAFF
         ]
-
-from django.contrib import admin
-from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from django.utils.translation import gettext_lazy as _
-from .models import User
-
-
-@admin.register(User)
-class UserAdmin(BaseUserAdmin):
-    """Custom admin panel configuration for the User model."""
-
-    # Fields shown in the list view
-    list_display = ("email", "first_name", "last_name", "user_type", "is_staff", "is_active")
-    list_filter = ("user_type", "is_staff", "is_active", "is_superuser")
-    search_fields = ("email", "first_name", "last_name", "phone_number")
-    ordering = ("email",)
-    
-    # Organize fields into sections in the admin detail view
-    fieldsets = (
-        (None, {"fields": ("email", "password")}),
-        (_("Personal info"), {"fields": ("first_name", "last_name", "phone_number", "user_type")}),
-        (
-            _("Permissions"),
-            {
-                "fields": (
-                    "is_active",
-                    "is_staff",
-                    "is_superuser",
-                    "groups",
-                    "user_permissions",
-                ),
-            },
-        ),
-        (_("Important dates"), {"fields": ("last_login",)}),
-    )
-
-    # Fields shown when adding a new user via the admin
-    add_fieldsets = (
-        (
-            None,
-            {
-                "classes": ("wide",),
-                "fields": ("email", "password1", "password2", "user_type", "is_active", "is_staff"),
-            },
-        ),
-    )
+        

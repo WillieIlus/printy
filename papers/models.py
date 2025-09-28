@@ -74,9 +74,15 @@ class PaperType(models.Model):
     is_special = models.BooleanField(
         default=False, help_text=_("True if this is a special material like Tic Tac")
     )
-    default_size = models.CharField(
-        max_length=20, default="SRA3", help_text=_("Default sheet size")
+
+    size = models.ForeignKey(
+        ProductionPaperSize,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        help_text=_("Default sheet size"),
     )
+
 
     class Meta:
         verbose_name = _("Digital paper type")

@@ -1,51 +1,82 @@
 from django.contrib import admin
-from .models import PrintCompany, ClientProfile, CompanyStaffProfile
+# Cleaned up imports
+from .models import PrintCompany, ServiceCategory, ClientProfile, CompanyStaffProfile, PortfolioItem 
 
-@admin.register(PrintCompany)
-class PrintCompanyAdmin(admin.ModelAdmin):
-    """Admin configuration for the PrintCompany model."""
-    # Fields to display in the list view
-    list_display = ('name', 'website', 'phone', 'email', 'is_active')
-    
-    # Filters on the right sidebar
-    list_filter = ('is_active',)
-    
-    # Fields to search by
-    search_fields = ('name', 'email', 'phone')
-    
-    # Automatically generate the slug from the name field
+@admin.register(ServiceCategory)
+class ServiceCategoryAdmin(admin.ModelAdmin):
+    list_display = ('name', 'slug')
+    search_fields = ('name',)
     prepopulated_fields = {'slug': ('name',)}
-    
-    # Read-only fields
-    readonly_fields = ('created_at', 'updated_at')
-    
-    # Organize fields into sections for the edit form
     fieldsets = (
         (None, {
-            'fields': ('name', 'slug', 'logo', 'description')
+            'fields': ('name', 'slug', 'description'),
+            'description': """
+                <p class="help">
+                    <b>What are Service Categories?</b><br>
+                    These are tags used to classify your company. 
+                    Examples: <em>'Digital Printing', 'Book Binding', 'Promotional Items'</em>.
+                </p>
+            """
         }),
-        ('Contact Information', {
-            'fields': ('website', 'phone', 'email', 'address')
+    )
+
+class PortfolioItemInline(admin.TabularInline):
+    model = PortfolioItem
+    extra = 1
+    fields = ('image', 'title', 'description', 'date_completed', 'is_featured')
+    verbose_name = "Portfolio Project"
+    verbose_name_plural = "Portfolio Projects"
+    
+@admin.register(PrintCompany)
+class PrintCompanyAdmin(admin.ModelAdmin):
+    list_display = ('name', 'owner', 'website', 'phone', 'is_active')
+    list_filter = ('is_active', 'services')
+    search_fields = ('name', 'owner__email', 'phone')
+    prepopulated_fields = {'slug': ('name',)}
+    readonly_fields = ('created_at', 'updated_at')
+    inlines = [PortfolioItemInline]
+    
+    # CORRECTED and MERGED fieldsets
+    fieldsets = (
+        (None, {
+            'fields': ('owner', 'name', 'slug'),
+            'description': """
+                <p class="help">
+                    <b>Welcome to your Company Profile!</b><br>
+                    This is where you control all the public information about your business.
+                </p>
+            """
         }),
-        ('Status', {
-            'fields': ('is_active',)
+        ('Company Description', {
+            'fields': ('description',),
+        }),
+        ('Branding & Page Theme 🎨', {
+            'classes': ('collapse',),
+            'fields': ('logo', 'primary_color', 'secondary_color'),
+        }),
+        ('Services Offered', {
+            'fields': ('services',),
+            'description': "<p class='help'>Select all service categories that your company provides.</p>"
+        }),
+        ('Contact & Location 📍', {
+            'fields': ('website', 'phone', 'email', 'address', 'latitude', 'longitude'),
+            'description': "<p class='help'>Latitude and Longitude are crucial for the map feature.</p>"
+        }),
+        ('Operational Status', {
+            'fields': ('current_busy_level', 'is_active'),
+             'description': "<p class='help'>Set your current production capacity and public visibility.</p>"
         }),
         ('Timestamps', {
-            'fields': ('created_at', 'updated_at')
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',),
         }),
     )
 
 @admin.register(ClientProfile)
 class ClientProfileAdmin(admin.ModelAdmin):
-    """Admin configuration for the ClientProfile model."""
-    # Use autocomplete for the user field for better performance
     autocomplete_fields = ('user',)
-    
-    # Display related user info and optimize database queries
     list_display = ('user', 'get_user_email', 'company_name')
     list_select_related = ('user',)
-    
-    # Fields to search by (including related user fields)
     search_fields = ('user__email', 'user__first_name', 'user__last_name', 'company_name')
 
     @admin.display(description='User Email', ordering='user__email')
@@ -54,16 +85,10 @@ class ClientProfileAdmin(admin.ModelAdmin):
 
 @admin.register(CompanyStaffProfile)
 class CompanyStaffProfileAdmin(admin.ModelAdmin):
-    """Admin configuration for the CompanyStaffProfile model."""
-    # Use autocomplete for foreign keys for better performance
     autocomplete_fields = ('user', 'company')
-    
-    # Display related info and optimize database queries
     list_display = ('user', 'company', 'job_title')
     list_select_related = ('user', 'company')
-    
-    # Filters on the right sidebar
     list_filter = ('company',)
-    
-    # Fields to search by
     search_fields = ('user__email', 'user__first_name', 'user__last_name', 'company__name', 'job_title')
+    
+    

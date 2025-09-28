@@ -6,9 +6,11 @@ from django.db import models
 from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 
+from accounts.models import User
 from core.models import PrintCompany
 from papers.models import PaperType, FinalPaperSize
 from machines.models import Machine
+from core.models import ServiceCategory
 
 import math
 
@@ -34,39 +36,12 @@ class ProductImage(models.Model):
 
     class Meta:
         ordering = ["order"]
+        unique_together = ("product", "order")
         verbose_name = _("product image")
         verbose_name_plural = _("product images")
 
     def __str__(self):
         return self.alt_text or f"Image for {self.product.name}"
-
-
-class ProductCategory(models.Model):
-    """
-    Represents a category for products (e.g., Business Cards, Flyers).
-    """
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(_("name"), max_length=100, unique=True)
-    slug = models.SlugField(
-        _("slug"),
-        max_length=100,
-        unique=True,
-        blank=True,
-        db_index=True,
-    )
-
-    class Meta:
-        verbose_name = _("product category")
-        verbose_name_plural = _("product categories")
-
-    def save(self, *args, **kwargs):
-        """Automatically generates a slug from the category name."""
-        if not self.slug:
-            self.slug = slugify(self.name)
-        super().save(*args, **kwargs)
-
-    def __str__(self):
-        return self.name
 
 
 class ProductTemplate(models.Model):
@@ -82,7 +57,7 @@ class ProductTemplate(models.Model):
         verbose_name=_("company"),
     )
     category = models.ForeignKey(
-        ProductCategory,
+        ServiceCategory,
         on_delete=models.PROTECT,
         related_name="products",
         verbose_name=_("category"),
@@ -159,9 +134,9 @@ class ProductTemplate(models.Model):
         return f"From KES {min_price_f}"
     
     
-# class Review(models.Model):
-#     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="reviews")
-#     user = models.ForeignKey(User, on_delete=models.CASCADE)
-#     rating = models.PositiveIntegerField(default=5)
-#     comment = models.TextField()
-#     created_at = models.DateTimeField(auto_now_add=True)
+class Review(models.Model):
+    product = models.ForeignKey(ProductTemplate, on_delete=models.CASCADE, related_name="reviews")
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    rating = models.PositiveIntegerField(default=5)
+    comment = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
