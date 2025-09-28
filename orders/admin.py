@@ -80,9 +80,14 @@ class JobDeliverableAdmin(admin.ModelAdmin):
     Detailed admin configuration for the JobDeliverable model.
     This page is used for in-depth editing of a single deliverable.
     """
-    list_display = ('name', 'order', 'quantity', 'size', 'is_booklet')
+    # --- STEP 1: Add the price display method to the list view ---
+    list_display = ('name', 'order', 'quantity', 'size', 'is_booklet', 'display_total_price')
     list_filter = ('order__printer', 'is_booklet', 'size')
     search_fields = ('name', 'order__job_ref', 'order__name')
+    
+    # --- STEP 2: Add readonly fields for calculated values ---
+    # These will appear as non-editable fields in the detail view
+    readonly_fields = ('display_total_price', 'display_production_summary')
     
     # Use autocomplete fields for all foreign keys
     autocomplete_fields = (
@@ -96,6 +101,10 @@ class JobDeliverableAdmin(admin.ModelAdmin):
     fieldsets = (
         ('Core Details', {
             'fields': ('order', 'name', 'quantity', 'size')
+        }),
+        # --- STEP 3: (Optional) Add a new fieldset for the calculated results ---
+        ('Calculations', {
+            'fields': ('display_total_price', 'display_production_summary')
         }),
         ('Booklet Specifications', {
             'classes': ('collapse',),
@@ -116,3 +125,15 @@ class JobDeliverableAdmin(admin.ModelAdmin):
             'fields': ('bleed_mm', 'gutter_mm', 'gripper_mm')
         }),
     )
+
+    # --- STEP 4: Define the methods to call your model's logic ---
+    @admin.display(description='Total Price')
+    def display_total_price(self, obj):
+        currency = "KES"
+        # Calls the total_price() method from your JobDeliverable model 
+        return f"{obj.total_price()} {currency}"
+
+    @admin.display(description='Production Summary')
+    def display_production_summary(self, obj):
+        # Calls the production_summary() method from your JobDeliverable model 
+        return obj.production_summary()

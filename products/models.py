@@ -141,7 +141,24 @@ class ProductTemplate(models.Model):
             return _("Request Quote")
         return f"From KES {price.quantize(Decimal('0.01'))}"
 
-
+    @property
+    def price_display(self):
+        from engine.services.products import get_product_price_range
+        min_price, max_price = get_product_price_range(self)
+        
+        if min_price is None:
+            return _("Request Quote")
+            
+        # Format the prices to 2 decimal places
+        min_price_f = min_price.quantize(Decimal('0.01'))
+        
+        if max_price and max_price > min_price:
+            max_price_f = max_price.quantize(Decimal('0.01'))
+            return f"KES {min_price_f} - {max_price_f}"
+            
+        return f"From KES {min_price_f}"
+    
+    
 # class Review(models.Model):
 #     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="reviews")
 #     user = models.ForeignKey(User, on_delete=models.CASCADE)

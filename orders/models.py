@@ -141,6 +141,16 @@ class JobDeliverable(models.Model):
         blank=True,
         related_name="deliverables",
     )
+    
+    # Corrected ForeignKey to ProductTemplate
+    source_template = models.ForeignKey(
+        "products.ProductTemplate", 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        related_name="deliverables",
+        help_text=_("The product template this deliverable is based on, if any.")
+    )
 
     # Imposition overrides (mm)
     bleed_mm = models.PositiveIntegerField(default=3)
@@ -197,6 +207,7 @@ class JobDeliverable(models.Model):
         sheets_per_copy = math.ceil(inner_pages / 4.0)
 
         return impositions.sheets_needed(self.quantity, items_per_sheet=1) * sheets_per_copy
+
 
     def total_price(self) -> Decimal:
         cover_sheets = self._cover_sheets_needed()
