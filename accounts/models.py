@@ -118,3 +118,30 @@ class User(AbstractBaseUser, PermissionsMixin):
             self.UserType.STAFF
         ]
         
+
+class ClientProfile(models.Model):
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='client_profile'
+    )
+    company_name = models.CharField(max_length=255)
+
+    def __str__(self):
+        return f"{self.company_name} ({self.user.email})"
+
+
+class CompanyStaffProfile(models.Model):
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='company_staff_profile'
+    )
+    company = models.ForeignKey(
+        'core.PrintCompany',  # Assuming PrintCompany is in core/models.py
+        on_delete=models.CASCADE,
+        related_name='staff_members'
+    )
+
+    def __str__(self):
+        return f"{self.user.email} - {self.company.name}"

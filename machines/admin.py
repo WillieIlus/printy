@@ -1,13 +1,6 @@
 from django.contrib import admin
-from .models import Machine, ServiceCategory, MachineType
+from .models import Machine, MachineType
 
-@admin.register(ServiceCategory)
-class ServiceCategoryAdmin(admin.ModelAdmin):
-    """Admin configuration for Service Categories."""
-    list_display = ('name', 'description')
-    search_fields = ('name',)
-    # Automatically generate the slug from the name field for convenience
-    prepopulated_fields = {'slug': ('name',)}
 
 @admin.register(Machine)
 class MachineAdmin(admin.ModelAdmin):

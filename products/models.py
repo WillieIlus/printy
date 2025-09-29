@@ -12,6 +12,8 @@ from papers.models import PaperType, FinalPaperSize
 from machines.models import Machine
 from core.models import ServiceCategory
 
+from engine.services.products import product_starting_price, get_product_price_range
+
 import math
 
 
@@ -95,43 +97,51 @@ class ProductTemplate(models.Model):
 
     def __str__(self):
         return self.name
-
+ 
     @property
     def main_image(self):
         """Returns the main product image (order 0) or None."""
         first_image = self.additional_images.order_by("order").first()
         return first_image.image if first_image else None
 
-    def get_mandatory_finishings(self):
-        return self.mandatory_finishings.all()
-
-    def get_optional_finishings(self):
-        return self.optional_finishings.all()
-
     @property
     def starting_price(self):
-        from engine.services.products import product_starting_price
-        price = product_starting_price(self)
+        """
+        Calculates and caches the starting price for this product.
+        The result is cached per-instance to avoid re-calculation.
+        """
+        if not hasattr(self, '_cached_starting_price'):
+            price = product_starting_price(self)
+            self._cached_starting_price = price
+        
+        price = self._cached_starting_price
         if price is None:
             return _("Request Quote")
+        
         return f"From KES {price.quantize(Decimal('0.01'))}"
 
     @property
     def price_display(self):
-        from engine.services.products import get_product_price_range
-        min_price, max_price = get_product_price_range(self)
-        
+        """
+        Calculates and caches the price range for display.
+        The result is cached per-instance to avoid re-calculation.
+        """
+        if not hasattr(self, '_cached_price_range'):
+            self._cached_price_range = get_product_price_range(self)
+
+        min_price, max_price = self._cached_price_range
+
         if min_price is None:
             return _("Request Quote")
-            
-        # Format the prices to 2 decimal places
+        
         min_price_f = min_price.quantize(Decimal('0.01'))
         
         if max_price and max_price > min_price:
             max_price_f = max_price.quantize(Decimal('0.01'))
             return f"KES {min_price_f} - {max_price_f}"
-            
+        
         return f"From KES {min_price_f}"
+
     
     
 class Review(models.Model):

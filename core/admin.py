@@ -1,10 +1,11 @@
 from django.contrib import admin
 # Cleaned up imports
 from .models import PrintCompany, ServiceCategory, ClientProfile, CompanyStaffProfile, PortfolioItem 
-
+from core.models import ServiceCategory
+ 
 @admin.register(ServiceCategory)
 class ServiceCategoryAdmin(admin.ModelAdmin):
-    list_display = ('name', 'slug')
+    list_display = ('name', 'slug', 'description')
     search_fields = ('name',)
     prepopulated_fields = {'slug': ('name',)}
     fieldsets = (

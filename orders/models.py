@@ -167,25 +167,34 @@ class JobDeliverable(models.Model):
     def __str__(self):
         return f"{self.name} x{self.quantity}"
 
-    # ---------- Imposition helpers ----------
+# ---------- Imposition helpers (NOW DELEGATED TO SERVICE) ----------
     def items_per_sheet(self, sheet_w_mm: float, sheet_h_mm: float) -> int:
+        """Delegates calculation to the centralized impositions service."""
         final_w, final_h = self._final_dims_mm()
         return impositions.items_per_sheet(
             sheet_w_mm, sheet_h_mm, final_w, final_h,
-            bleed_mm=self.bleed_mm, gutter_mm=self.gutter_mm, gripper_mm=self.gripper_mm,
+            bleed_mm=self.bleed_mm, gutter_mm=self.gutter_mm
         )
 
     def sheets_needed(self, sheet_w_mm: float, sheet_h_mm: float, quantity: int) -> int:
+        """Delegates calculation to the centralized impositions service."""
         per_sheet = self.items_per_sheet(sheet_w_mm, sheet_h_mm)
         return impositions.sheets_needed(quantity, per_sheet)
 
     def best_fit_orientation(self, sheet_w_mm: float, sheet_h_mm: float):
+        """Delegates calculation to the centralized impositions service."""
         final_w, final_h = self._final_dims_mm()
         return impositions.best_fit_orientation(
             sheet_w_mm, sheet_h_mm, final_w, final_h,
-            bleed_mm=self.bleed_mm, gutter_mm=self.gutter_mm, gripper_mm=self.gripper_mm,
+            bleed_mm=self.bleed_mm, gutter_mm=self.gutter_mm
         )
 
+    # ---------- Private helpers ----------
+    def _final_dims_mm(self):
+        """Helper to get final item dimensions from the size FK."""
+        return self.size.width_mm, self.size.height_mm
+    
+    
     # ---------- Booklet-specific helpers ----------
     def _cover_sheets_needed(self) -> int:
         if not self.is_booklet or not self.cover_machine or not self.cover_material:
