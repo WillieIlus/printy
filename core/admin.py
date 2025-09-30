@@ -1,6 +1,6 @@
 from django.contrib import admin
 # Cleaned up imports
-from .models import PrintCompany, ServiceCategory, ClientProfile, CompanyStaffProfile, PortfolioItem 
+from .models import PrintCompany, ServiceCategory, PortfolioItem 
 from core.models import ServiceCategory
  
 @admin.register(ServiceCategory)
@@ -73,23 +73,5 @@ class PrintCompanyAdmin(admin.ModelAdmin):
         }),
     )
 
-@admin.register(ClientProfile)
-class ClientProfileAdmin(admin.ModelAdmin):
-    autocomplete_fields = ('user',)
-    list_display = ('user', 'get_user_email', 'company_name')
-    list_select_related = ('user',)
-    search_fields = ('user__email', 'user__first_name', 'user__last_name', 'company_name')
-
-    @admin.display(description='User Email', ordering='user__email')
-    def get_user_email(self, obj):
-        return obj.user.email
-
-@admin.register(CompanyStaffProfile)
-class CompanyStaffProfileAdmin(admin.ModelAdmin):
-    autocomplete_fields = ('user', 'company')
-    list_display = ('user', 'company', 'job_title')
-    list_select_related = ('user', 'company')
-    list_filter = ('company',)
-    search_fields = ('user__email', 'user__first_name', 'user__last_name', 'company__name', 'job_title')
     
     

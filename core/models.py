@@ -141,62 +141,6 @@ class PrintCompany(models.Model):
         return Decimal(str(multipliers.get(self.current_busy_level, 1.0)))
 
 
-
-class ClientProfile(models.Model):
-    """
-    Profile model for a client user.
-
-    Extends the custom User model with client-specific information.
-    """
-    user = models.OneToOneField(
-        User,
-        on_delete=models.CASCADE,
-        related_name="client_profile",
-        limit_choices_to={'user_type': User.UserType.CLIENT}
-    )
-    company_name = models.CharField(max_length=200, blank=True)
-    billing_address = models.TextField(blank=True)
-
-    class Meta:
-        verbose_name_plural = "Client Profiles"
-        
-    def __str__(self):
-        return self.user.get_full_name()
-
-
-class CompanyStaffProfile(models.Model):
-    """
-    Profile model for staff members of a print company.
-
-    Extends the custom User model with company-related information.
-    """
-    user = models.OneToOneField(
-        User,
-        on_delete=models.CASCADE,
-        related_name="staff_profile",
-        limit_choices_to={'user_type__in': [
-            User.UserType.COMPANY_OWNER,
-            User.UserType.COMPANY_ADMIN,
-            User.UserType.STAFF
-        ]}
-    )
-    company = models.ForeignKey(
-        PrintCompany,
-        on_delete=models.CASCADE,
-        related_name="staff_members"
-    )
-    job_title = models.CharField(max_length=100, blank=True)
-    internal_notes = models.TextField(blank=True)
-
-    class Meta:
-        # Use a `UniqueConstraint` for modern Django versions (3.0+).
-        constraints = [
-            models.UniqueConstraint(fields=['user', 'company'], name='unique_staff_per_company')
-        ]
-        verbose_name_plural = "Company Staff Profiles"
-        
-    def __str__(self):
-        return f"{self.user.get_full_name()} @ {self.company.name}"
     
     
 class PortfolioItem(models.Model):
