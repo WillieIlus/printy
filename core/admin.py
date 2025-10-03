@@ -1,3 +1,4 @@
+#core/admin.py
 from django.contrib import admin
 # Cleaned up imports
 from .models import PrintCompany, ServiceCategory, PortfolioItem 

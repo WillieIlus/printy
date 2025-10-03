@@ -1,3 +1,4 @@
+# engine/services/products.py
 from decimal import Decimal
 import math
 

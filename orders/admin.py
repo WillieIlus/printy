@@ -1,15 +1,11 @@
+#orders/admin.py
 from django.contrib import admin
 from .models import Order, JobDeliverable, DeliverableFinishing
 
-class DeliverableFinishingInline(admin.TabularInline):
-    """
-    Inline admin for managing finishing services on a JobDeliverable.
-    Allows adding/editing finishings directly on the deliverable's page.
-    """
+class DeliverableFinishingInline(admin.StackedInline):
     model = DeliverableFinishing
-    # Use autocomplete for the service for better performance and usability
-    autocomplete_fields = ('service',)
-    extra = 1  # Show one empty slot for adding a new finishing service
+    autocomplete_fields = ("service",)
+    extra = 1
 
 class JobDeliverableInline(admin.TabularInline):
     """
@@ -17,22 +13,16 @@ class JobDeliverableInline(admin.TabularInline):
     Provides a link to the full edit page for each deliverable.
     """
     model = JobDeliverable
-    # Display a concise set of fields in the order view
-    fields = ('name', 'quantity', 'size', 'is_booklet', 'page_count')
-    readonly_fields = ('name', 'quantity', 'size', 'is_booklet', 'page_count')
-    # Link to the full change form for detailed editing
+    fields = ('name', 'quantity', 'size', 'is_booklet', 'page_count', 'total_price')
+    readonly_fields = ('name', 'size', 'is_booklet', 'page_count', 'total_price')
     show_change_link = True
-    extra = 0 # Don't show extra forms by default, as they are complex
+    extra = 0  # Don't show extra forms by default, as they are complex
 
     def has_add_permission(self, request, obj=None):
-        # Disable adding deliverables directly from the order inline
-        # to encourage using the full form for this complex model.
         return False
 
     def has_delete_permission(self, request, obj=None):
-        # Allow deletion from the order page
         return True
-
 
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
@@ -70,70 +60,80 @@ class OrderAdmin(admin.ModelAdmin):
     @admin.display(description='Total Price')
     def display_total_price(self, obj):
         # Format the total price with currency for display
-        # This assumes a single currency for the order for simplicity.
-        currency = "KES"
+        currency = "KES"  # Assuming Kenyan Shillings as per location
         return f"{obj.total_price()} {currency}"
 
 @admin.register(JobDeliverable)
 class JobDeliverableAdmin(admin.ModelAdmin):
-    """
-    Detailed admin configuration for the JobDeliverable model.
-    This page is used for in-depth editing of a single deliverable.
-    """
-    # --- STEP 1: Add the price display method to the list view ---
-    list_display = ('name', 'order', 'quantity', 'size', 'is_booklet', 'display_total_price')
+    list_display = ('name', 'order', 'quantity', 'is_booklet', 'display_total_price')
     list_filter = ('order__printer', 'is_booklet', 'size')
     search_fields = ('name', 'order__job_ref', 'order__name')
-    
-    # --- STEP 2: Add readonly fields for calculated values ---
-    # These will appear as non-editable fields in the detail view
-    readonly_fields = ('display_total_price', 'display_production_summary')
-    
-    # Use autocomplete fields for all foreign keys
+
+    # ✅ only include methods if they’re actually defined in this class
+    readonly_fields = ('total_price', 'display_total_price', 'display_production_summary')
+
     autocomplete_fields = (
         'order', 'size', 'cover_machine', 'cover_material', 'inner_machine', 'inner_material'
     )
-    
-    # Use the inline for managing finishing services
     inlines = [DeliverableFinishingInline]
-    
-    # Organize the very complex form into logical, collapsible sections
+
     fieldsets = (
         ('Core Details', {
             'fields': ('order', 'name', 'quantity', 'size')
         }),
-        # --- STEP 3: (Optional) Add a new fieldset for the calculated results ---
         ('Calculations', {
-            'fields': ('display_total_price', 'display_production_summary')
+            'fields': ('total_price', 'display_total_price', 'display_production_summary')
+        }),
+        ('Primary Specifications (for all jobs)', {
+            'fields': ('inner_machine', 'inner_material', 'inner_sidedness')
         }),
         ('Booklet Specifications', {
             'classes': ('collapse',),
             'fields': ('is_booklet', 'page_count', 'binding')
         }),
-        ('Cover Specifications', {
+        ('Cover Specifications (Booklets Only)', {
             'classes': ('collapse',),
-            'description': "These fields are primarily for booklets.",
             'fields': ('cover_machine', 'cover_material', 'cover_sidedness')
-        }),
-        ('Inner Pages Specifications', {
-            'classes': ('collapse',),
-            'fields': ('inner_machine', 'inner_material', 'inner_sidedness')
         }),
         ('Imposition Settings (Advanced)', {
             'classes': ('collapse',),
-            'description': "Adjust the bleed and spacing for print production.",
             'fields': ('bleed_mm', 'gutter_mm', 'gripper_mm')
         }),
     )
 
-    # --- STEP 4: Define the methods to call your model's logic ---
+    # ✅ define the admin methods correctly
     @admin.display(description='Total Price')
     def display_total_price(self, obj):
         currency = "KES"
-        # Calls the total_price() method from your JobDeliverable model 
-        return f"{obj.total_price()} {currency}"
+        return f"{obj.total_price} {currency}"
 
     @admin.display(description='Production Summary')
     def display_production_summary(self, obj):
-        # Calls the production_summary() method from your JobDeliverable model 
         return obj.production_summary()
+
+
+@admin.display(description='Total Price')
+def display_total_price(self, obj):
+    currency = "KES"  # fallback
+    if obj.inner_material and hasattr(obj.inner_material, "digital_prices"):
+        price_rule = obj.inner_material.digital_prices.first()
+        if price_rule:
+            currency = price_rule.currency
+    return f"{obj.total_price} {currency}"
+
+
+@admin.display(description='Production Summary')
+def display_production_summary(self, obj):
+    # Calls the production_summary() method from your JobDeliverable model 
+    return obj.production_summary()
+
+def save_model(self, request, obj, form, change):
+    # Validate required fields for flat jobs
+    if not obj.is_booklet and (not obj.inner_machine or not obj.inner_material):
+        raise ValueError("Flat jobs must have an inner machine and material selected.")
+
+    # Validate required fields for booklets
+    if obj.is_booklet and (not obj.cover_machine or not obj.cover_material):
+        raise ValueError("Booklets must have both cover and inner machine/material selected.")
+
+    super().save_model(request, obj, form, change)
