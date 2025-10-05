@@ -110,30 +110,10 @@ class JobDeliverableAdmin(admin.ModelAdmin):
     @admin.display(description='Production Summary')
     def display_production_summary(self, obj):
         return obj.production_summary()
+    
+    def save_model(self, request, obj, form, change):
+        # Recalculate total price before saving
+        obj.total_price = obj.calculate_price()
+        super().save_model(request, obj, form, change)
 
 
-@admin.display(description='Total Price')
-def display_total_price(self, obj):
-    currency = "KES"  # fallback
-    if obj.inner_material and hasattr(obj.inner_material, "digital_prices"):
-        price_rule = obj.inner_material.digital_prices.first()
-        if price_rule:
-            currency = price_rule.currency
-    return f"{obj.total_price} {currency}"
-
-
-@admin.display(description='Production Summary')
-def display_production_summary(self, obj):
-    # Calls the production_summary() method from your JobDeliverable model 
-    return obj.production_summary()
-
-def save_model(self, request, obj, form, change):
-    # Validate required fields for flat jobs
-    if not obj.is_booklet and (not obj.inner_machine or not obj.inner_material):
-        raise ValueError("Flat jobs must have an inner machine and material selected.")
-
-    # Validate required fields for booklets
-    if obj.is_booklet and (not obj.cover_machine or not obj.cover_material):
-        raise ValueError("Booklets must have both cover and inner machine/material selected.")
-
-    super().save_model(request, obj, form, change)

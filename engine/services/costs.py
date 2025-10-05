@@ -5,6 +5,27 @@ from pricing.models import DigitalPrintPrice, FinishingService
 
 
 # ---------------- Digital Print Costs ----------------
+import logging
+logger = logging.getLogger(__name__)
+
+def _calculate_flat_price(self):
+    if not self.inner_material or not self.inner_machine:
+        return Decimal("0.00")
+
+    logger.debug(f"Material: {self.inner_material}, Size: {self.size}, Machine: {self.inner_machine}")
+    logger.debug(f"Inner material dims: {getattr(self.inner_material, 'width_mm', None)} x {getattr(self.inner_material, 'height_mm', None)}")
+
+    items_ps = impositions.items_per_sheet(
+        sheet_w_mm=self.inner_material.width_mm,
+        sheet_h_mm=self.inner_material.height_mm,
+        item_w_mm=self.size.width_mm,
+        item_h_mm=self.size.height_mm,
+        bleed_mm=self.bleed_mm,
+        gutter_mm=self.gutter_mm
+    )
+    sheets = impositions.sheets_needed(self.quantity, items_ps)
+    return costs.digital_section_cost(self.inner_machine, self.inner_material, self.inner_sidedness, sheets)
+
 
 def digital_section_cost(machine, material, sidedness: str, sheets_needed: int) -> Decimal:
     """
