@@ -99,6 +99,8 @@ class JobDeliverable(models.Model):
     name = models.CharField(max_length=120, help_text=_("e.g., 'Book – Title XYZ'"))
     quantity = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
     size = models.ForeignKey(FinalPaperSize, on_delete=models.PROTECT, related_name="deliverables")
+    
+    #we need to add sidedness so it is refered by the cost service from here instead
 
     # This field stores the calculated total price.
     total_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -137,7 +139,7 @@ class JobDeliverable(models.Model):
         on_delete=models.PROTECT,
         related_name="inner_deliverables",
     )
-    inner_sidedness = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.DOUBLE)
+    sidedness = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.DOUBLE)
 
     # Binding & finishing
     binding = models.CharField(max_length=12, choices=BindingType.choices, default=BindingType.NONE)
@@ -211,10 +213,10 @@ class JobDeliverable(models.Model):
 
         return price.quantize(DECIMAL_QUANT, rounding=ROUND_HALF_UP)
 
-    def save(self, *args, **kwargs):
-        """Override save to automatically calculate the price."""
-        self.total_price = self.calculate_price()
-        super().save(*args, **kwargs)
+    # def save(self, *args, **kwargs):
+    #     """Override save to automatically calculate the price."""
+    #     self.total_price = self.calculate_price()
+    #     super().save(*args, **kwargs)
 
     # ---------- HELPERS ----------
 
@@ -259,6 +261,40 @@ class JobDeliverable(models.Model):
             cover_sheets=self._cover_sheets_needed(),
             inner_sheets=self._inner_sheets_needed(),
         )
+        
+    from django.db import models
+
+def save(self, *args, **kwargs):
+    # Auto-assign print_price if not set
+    if not getattr(self, "print_price", None):
+        try:
+            from pricing.models import DigitalPrintPrice
+            machine = getattr(self, "inner_machine", None)
+            material = getattr(self, "inner_material", None)
+            qs = DigitalPrintPrice.objects.all()
+            # Try exact price.size == material.size
+            if machine and material:
+                mat_size = getattr(material, "size", None)
+                if mat_size:
+                    found = qs.filter(machine=machine, size=mat_size).first()
+                    if found:
+                        self.print_price = found
+            # Try machine + paper_type
+            if not getattr(self, "print_price", None) and machine and material:
+                paper_type = getattr(material, "paper_type", None) or (material if getattr(material, 'name', None) and not getattr(material, 'paper_type', None) else None)
+                if paper_type:
+                    found = qs.filter(machine=machine, paper_type=paper_type).first()
+                    if found:
+                        self.print_price = found
+            # Fallback to any price for machine
+            if not getattr(self, "print_price", None) and machine:
+                found = qs.filter(machine=machine).first()
+                if found:
+                    self.print_price = found
+        except Exception:
+            pass
+
+    super().save(*args, **kwargs)
 
 
 # -------------------------------------------------------------------

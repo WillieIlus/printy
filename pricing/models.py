@@ -3,7 +3,7 @@ import uuid
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from core.models import PrintCompany
-from papers.models import PaperType
+from papers.models import PaperType, ProductionPaperSize
 from machines.models import Machine, MachineType
 
 
@@ -53,6 +53,8 @@ class DigitalPrintPrice(models.Model):
         default=0,
         help_text=_("The minimum total charge for any job using this price."),
     )
+    size = models.ForeignKey(    ProductionPaperSize,    on_delete=models.PROTECT,    null=True, blank=True,    help_text="Default production sheet size for this price (e.g., SRA3).",)
+
 
     class Meta:
         unique_together = ("machine", "paper_type")
@@ -66,6 +68,12 @@ class DigitalPrintPrice(models.Model):
             f"Single {self.single_side_price}{self.currency}, "
             f"Double {self.double_side_price}{self.currency}"
         )
+        
+    def save(self, *args, **kwargs):
+        if not self.size:
+            from papers.models import ProductionPaperSize
+            self.size = ProductionPaperSize.objects.filter(name__iexact="SRA3").first()
+        super().save(*args, **kwargs)
 
 
 class LargeFormatPrintPrice(models.Model):
