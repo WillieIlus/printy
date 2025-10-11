@@ -186,25 +186,44 @@ class JobDeliverableAdmin(admin.ModelAdmin):
 
     def save_model(self, request, obj, form, change):
         """
-        If model has calculate_price() use it to fill total_price before saving.
-        If compute_total_cost is available and print_price is set, prefer that for stored total_price.
+        Admin: compute imposition/sheets then compute cost and persist total_price.
+        Uses engine.services.costs.compute_total_cost which will auto-find a price row
+        when obj.print_price is None.
         """
         try:
-            # prefer service compute_total_cost if available and print_price present
-            if getattr(obj, "print_price", None) is not None:
-                try:
-                    from engine.services.costs import compute_total_cost
-                    info = compute_total_cost(obj, getattr(obj, "print_price", None))
-                    obj.total_price = info.get("total_cost", getattr(obj, "total_price", None))
-                except Exception:
-                    # fallback to model calculate_price if present
-                    if hasattr(obj, "calculate_price") and callable(getattr(obj, "calculate_price")):
-                        obj.total_price = obj.calculate_price()
-            else:
+            # 1) ensure imposition / sheet counts are available on the object
+            inner_sheets = 0
+            cover_sheets = 0
+            try:
+                inner_sheets = int(obj._inner_sheets_needed() or 0)
+            except Exception:
+                inner_sheets = 0
+            try:
+                cover_sheets = int(obj._cover_sheets_needed() or 0)
+            except Exception:
+                cover_sheets = 0
+
+            # Attach a minimal imposition dict the cost service will pick up
+            obj.imposition = {
+                "inner_sheets": inner_sheets,
+                "cover_sheets": cover_sheets,
+                # For non-booklet jobs you can also include items_per_sheet if available:
+                # "items_per_sheet": some_value
+            }
+
+            # 2) compute total cost (compute_total_cost will try to auto-find DigitalPrintPrice)
+            from engine.services.costs import compute_total_cost
+            info = compute_total_cost(obj, getattr(obj, "print_price", None))
+            # info['total_cost'] is a Decimal
+            obj.total_price = info.get("total_cost", obj.total_price or 0)
+        except Exception:
+            # fallback: try existing calculate_price method if present
+            try:
                 if hasattr(obj, "calculate_price") and callable(getattr(obj, "calculate_price")):
                     obj.total_price = obj.calculate_price()
-        except Exception:
-            # never raise from save_model
-            pass
+            except Exception:
+                # do not raise during admin save
+                pass
 
         super().save_model(request, obj, form, change)
+

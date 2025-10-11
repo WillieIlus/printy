@@ -149,6 +149,9 @@ class JobDeliverable(models.Model):
         blank=True,
         related_name="deliverables",
     )
+    
+    
+    
 
     # Optional link to a product template
     source_template = models.ForeignKey(
@@ -162,8 +165,8 @@ class JobDeliverable(models.Model):
 
     # Imposition overrides
     bleed_mm = models.PositiveIntegerField(default=3)
-    gutter_mm = models.PositiveIntegerField(default=5)
-    gripper_mm = models.PositiveIntegerField(default=10)
+    gutter_mm = models.PositiveIntegerField(default=2)
+    gripper_mm = models.PositiveIntegerField(default=3)
 
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -264,37 +267,39 @@ class JobDeliverable(models.Model):
         
     from django.db import models
 
-def save(self, *args, **kwargs):
-    # Auto-assign print_price if not set
-    if not getattr(self, "print_price", None):
+    def save(self, *args, **kwargs):
+        # Compute sheet counts using your helpers (safe, non-persistent)
         try:
-            from pricing.models import DigitalPrintPrice
-            machine = getattr(self, "inner_machine", None)
-            material = getattr(self, "inner_material", None)
-            qs = DigitalPrintPrice.objects.all()
-            # Try exact price.size == material.size
-            if machine and material:
-                mat_size = getattr(material, "size", None)
-                if mat_size:
-                    found = qs.filter(machine=machine, size=mat_size).first()
-                    if found:
-                        self.print_price = found
-            # Try machine + paper_type
-            if not getattr(self, "print_price", None) and machine and material:
-                paper_type = getattr(material, "paper_type", None) or (material if getattr(material, 'name', None) and not getattr(material, 'paper_type', None) else None)
-                if paper_type:
-                    found = qs.filter(machine=machine, paper_type=paper_type).first()
-                    if found:
-                        self.print_price = found
-            # Fallback to any price for machine
-            if not getattr(self, "print_price", None) and machine:
-                found = qs.filter(machine=machine).first()
-                if found:
-                    self.print_price = found
+            inner_sheets = int(self._inner_sheets_needed() or 0)
         except Exception:
-            pass
+            inner_sheets = 0
+        try:
+            cover_sheets = int(self._cover_sheets_needed() or 0)
+        except Exception:
+            cover_sheets = 0
 
-    super().save(*args, **kwargs)
+        # Attach imposition dict in-memory for costs service to read
+        self.imposition = {
+            "inner_sheets": inner_sheets,
+            "cover_sheets": cover_sheets,
+        }
+
+        # Call cost service (which will auto-find a DigitalPrintPrice if print_price missing)
+        try:
+            from engine.services.costs import compute_total_cost
+            info = compute_total_cost(self, getattr(self, "print_price", None))
+            self.total_price = info.get("total_cost", self.total_price or 0)
+        except Exception:
+            # fallback to older calculate_price logic if available
+            try:
+                if hasattr(self, "calculate_price") and callable(getattr(self, "calculate_price")):
+                    self.total_price = self.calculate_price()
+            except Exception:
+                # swallow, don't break save
+                pass
+
+        super().save(*args, **kwargs)
+
 
 
 # -------------------------------------------------------------------
