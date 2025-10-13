@@ -13,48 +13,14 @@ class DigitalPrintPrice(models.Model):
     on a specific digital press.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    company = models.ForeignKey(
-        PrintCompany,
-        on_delete=models.CASCADE,
-        related_name="digital_print_prices",
-        help_text=_("The company this pricing belongs to."),
-    )
-    machine = models.ForeignKey(
-        Machine,
-        on_delete=models.CASCADE,
-        related_name="digital_prices",
-        limit_choices_to={"machine_type": MachineType.DIGITAL},
-        help_text=_("The digital press this pricing applies to."),
-    )
-    paper_type = models.ForeignKey(
-        PaperType,
-        on_delete=models.CASCADE,
-        related_name="digital_prices",
-        help_text=_("The paper stock this pricing applies to."),
-    )
-    single_side_price = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        help_text=_("Price per sheet (single-sided)."),
-    )
-    double_side_price = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        help_text=_("Price per sheet (double-sided)."),
-    )
-    currency = models.CharField(
-        max_length=10,
-        default="KES",
-        help_text=_("Currency for the pricing (e.g., KES, USD)."),
-    )
-    minimum_charge = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        default=0,
-        help_text=_("The minimum total charge for any job using this price."),
-    )
-    size = models.ForeignKey(    ProductionPaperSize,    on_delete=models.PROTECT,    null=True, blank=True,    help_text="Default production sheet size for this price (e.g., SRA3).",)
-
+    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name="digital_print_prices", help_text=_("The company this pricing belongs to."),)
+    machine = models.ForeignKey(Machine, on_delete=models.CASCADE, related_name="digital_prices", limit_choices_to={"machine_type": MachineType.DIGITAL}, help_text=_("The digital press this pricing applies to."),)
+    paper_type = models.ForeignKey( PaperType, on_delete=models.CASCADE, related_name="digital_prices", help_text=_("The paper stock this pricing applies to."),)
+    single_side_price = models.DecimalField(max_digits=10, decimal_places=2, help_text=_("Price per sheet (single-sided)."),)
+    double_side_price = models.DecimalField(max_digits=10, decimal_places=2, help_text=_("Price per sheet (double-sided)."),)
+    currency = models.CharField(max_length=10, default="KES", help_text=_("Currency for the pricing (e.g., KES, USD)."),)
+    minimum_charge = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text=_("The minimum total charge for any job using this price."),)
+    size = models.ForeignKey(ProductionPaperSize, on_delete=models.PROTECT, null=True, blank=True, help_text="Default production sheet size for this price (e.g., SRA3).",)
 
     class Meta:
         unique_together = ("machine", "paper_type")

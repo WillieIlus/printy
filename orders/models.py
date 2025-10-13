@@ -99,17 +99,26 @@ class JobDeliverable(models.Model):
     name = models.CharField(max_length=120, help_text=_("e.g., 'Book – Title XYZ'"))
     quantity = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
     size = models.ForeignKey(FinalPaperSize, on_delete=models.PROTECT, related_name="deliverables")
-    
-    #we need to add sidedness so it is refered by the cost service from here instead
 
-    # This field stores the calculated total price.
+    machine = models.ForeignKey(
+        Machine,
+        on_delete=models.PROTECT,
+        related_name="deliverables",
+        limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},
+    )
+    material = models.ForeignKey(
+        PaperType,
+        on_delete=models.PROTECT,
+        related_name="deliverables",
+        help_text=_("The paper stock this pricing applies to."),
+    )
+
+    sidedness = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.DOUBLE)
     total_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
-    # Booklet details
     is_booklet = models.BooleanField(default=False)
     page_count = models.PositiveIntegerField(default=1, help_text=_("Total pages including cover if booklet"))
 
-    # Cover specs (booklets only)
     cover_machine = models.ForeignKey(
         Machine,
         null=True,
@@ -127,21 +136,6 @@ class JobDeliverable(models.Model):
     )
     cover_sidedness = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.SINGLE)
 
-    # Inner specs (used for both booklets AND flat jobs)
-    inner_machine = models.ForeignKey(
-        Machine,
-        on_delete=models.PROTECT,
-        related_name="inner_deliverables",
-        limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},
-    )
-    inner_material = models.ForeignKey(
-        PaperType,
-        on_delete=models.PROTECT,
-        related_name="inner_deliverables",
-    )
-    sidedness = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.DOUBLE)
-
-    # Binding & finishing
     binding = models.CharField(max_length=12, choices=BindingType.choices, default=BindingType.NONE)
     finishings = models.ManyToManyField(
         "pricing.FinishingService",
@@ -149,11 +143,6 @@ class JobDeliverable(models.Model):
         blank=True,
         related_name="deliverables",
     )
-    
-    
-    
-
-    # Optional link to a product template
     source_template = models.ForeignKey(
         "products.ProductTemplate",
         on_delete=models.SET_NULL,
@@ -163,11 +152,9 @@ class JobDeliverable(models.Model):
         help_text=_("The product template this deliverable is based on, if any."),
     )
 
-    # Imposition overrides
     bleed_mm = models.PositiveIntegerField(default=3)
     gutter_mm = models.PositiveIntegerField(default=2)
     gripper_mm = models.PositiveIntegerField(default=3)
-
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -178,129 +165,41 @@ class JobDeliverable(models.Model):
     def __str__(self):
         return f"{self.name} x{self.quantity}"
 
-    # ---------- CALCULATION ----------
-
-    def _calculate_booklet_price(self):
-        cover_sheets = self._cover_sheets_needed()
-        inner_sheets = self._inner_sheets_needed()
-        return costs.deliverable_total(self, cover_sheets=cover_sheets, inner_sheets=inner_sheets)
-
-    def _calculate_flat_price(self):
-        """Calculates price for non-booklet items."""
-        if not self.inner_material or not self.inner_material.size or not self.inner_machine:
-            return Decimal("0.00")
-
-        items_ps = impositions.items_per_sheet(
-            sheet_w_mm=self.inner_material.size.width_mm,
-            sheet_h_mm=self.inner_material.size.height_mm,
-            item_w_mm=self.size.width_mm,
-            item_h_mm=self.size.height_mm,
-            bleed_mm=self.bleed_mm,
-            gutter_mm=self.gutter_mm,
-        )
-        sheets = impositions.sheets_needed(self.quantity, items_ps)
-
-        return costs.digital_section_cost(
-            self.inner_machine,
-            self.inner_material,
-            self.inner_sidedness,
-            sheets,
-        )
+    # -------------------------------------------------------------------
+    # SUMMARY + COST DELEGATION
+    # -------------------------------------------------------------------
+    def production_summary(self) -> str:
+        """Readable production + cost summary."""
+        from engine.services import summaries
+        return summaries.deliverable_summary(self)
 
     def calculate_price(self) -> Decimal:
-        """Unified method to calculate price based on deliverable type."""
-        if self.is_booklet:
-            price = self._calculate_booklet_price()
-        else:
-            price = self._calculate_flat_price()
-
-        return price.quantize(DECIMAL_QUANT, rounding=ROUND_HALF_UP)
-
-    # def save(self, *args, **kwargs):
-    #     """Override save to automatically calculate the price."""
-    #     self.total_price = self.calculate_price()
-    #     super().save(*args, **kwargs)
-
-    # ---------- HELPERS ----------
-
-    def _final_dims_mm(self):
-        return self.size.width_mm, self.size.height_mm
-
-    def _cover_sheets_needed(self) -> int:
-        if not self.is_booklet or not self.cover_machine or not self.cover_material:
-            return 0
-        return impositions.sheets_needed(self.quantity, 1)
-
-    def _inner_sheets_needed(self) -> int:
-        if not self.inner_machine or not self.inner_material:
-            return 0
-
-        if not self.is_booklet:
-            items_ps = impositions.items_per_sheet(
-                sheet_w_mm=self.inner_material.size.width_mm,
-                sheet_h_mm=self.inner_material.size.height_mm,
-                item_w_mm=self.size.width_mm,
-                item_h_mm=self.size.height_mm,
-                bleed_mm=self.bleed_mm,
-                gutter_mm=self.gutter_mm,
-            )
-            return impositions.sheets_needed(self.quantity, items_ps)
-
-        # Booklet calculation
-        pages = self.page_count
-        if pages % 4 != 0:
-            pages += (4 - (pages % 4))
-
-        if pages <= 4:
-            return 0
-
-        inner_pages = pages - 4
-        sheets_per_copy = math.ceil(inner_pages / 4.0)
-        return self.quantity * sheets_per_copy
-
-    def production_summary(self) -> str:
-        return summaries.deliverable_summary(
-            deliverable=self,
-            cover_sheets=self._cover_sheets_needed(),
-            inner_sheets=self._inner_sheets_needed(),
-        )
-        
-    from django.db import models
+        """
+        Delegates all cost computation to the engine.services.costs module.
+        """
+        from engine.services.costs import compute_total_cost
+        try:
+            result = compute_total_cost(self)
+            return result.get("total_cost", Decimal("0.00"))
+        except Exception:
+            return Decimal("0.00")
 
     def save(self, *args, **kwargs):
-        # Compute sheet counts using your helpers (safe, non-persistent)
+        """
+        Overrides save() to auto-calculate and store total_price.
+        """
+        from engine.services.costs import compute_total_cost
         try:
-            inner_sheets = int(self._inner_sheets_needed() or 0)
+            result = compute_total_cost(self)
+            self.total_price = result.get("total_cost", Decimal("0.00"))
         except Exception:
-            inner_sheets = 0
-        try:
-            cover_sheets = int(self._cover_sheets_needed() or 0)
-        except Exception:
-            cover_sheets = 0
-
-        # Attach imposition dict in-memory for costs service to read
-        self.imposition = {
-            "inner_sheets": inner_sheets,
-            "cover_sheets": cover_sheets,
-        }
-
-        # Call cost service (which will auto-find a DigitalPrintPrice if print_price missing)
-        try:
-            from engine.services.costs import compute_total_cost
-            info = compute_total_cost(self, getattr(self, "print_price", None))
-            self.total_price = info.get("total_cost", self.total_price or 0)
-        except Exception:
-            # fallback to older calculate_price logic if available
+            # fallback to manual calc
             try:
-                if hasattr(self, "calculate_price") and callable(getattr(self, "calculate_price")):
-                    self.total_price = self.calculate_price()
+                self.total_price = self.calculate_price()
             except Exception:
-                # swallow, don't break save
-                pass
+                self.total_price = Decimal("0.00")
 
         super().save(*args, **kwargs)
-
-
 
 # -------------------------------------------------------------------
 # DELIVERABLE FINISHINGS

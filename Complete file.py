@@ -1,684 +1,554 @@
-#papers/models.py
-from django.db import models
-from django.utils.translation import gettext_lazy as _
-import uuid
+from decimal import Decimal
+from math import floor, ceil
+from typing import Optional
+
+from papers.models import ProductionPaperSize  # This is safe because it’s not circular
+
+# -------------------------------------------------------------------
+# UTILITIES
+# -------------------------------------------------------------------
+def _to_decimal(v) -> Decimal:
+    """Convert numeric-like input to Decimal safely."""
+    if isinstance(v, Decimal):
+        return v
+    try:
+        return Decimal(str(v))
+    except Exception:
+        return Decimal("0.00")
 
 
 # -------------------------------------------------------------------
-# BASE SIZE
+# GRID FITTING
 # -------------------------------------------------------------------
-class BaseSize(models.Model):
-    """Abstract base for paper sizes."""
+def grid_count(
+    av_w: Decimal,
+    av_h: Decimal,
+    it_w: Decimal,
+    it_h: Decimal,
+    gutter: Decimal = Decimal("0.00"),
+    allow_rotation: bool = True,
+) -> int:
+    """
+    Calculate how many items fit within a given sheet area, considering gutter spacing.
+    """
 
-    PRODUCTION = "production"
-    FINAL = "final"
+    def fit(w, h, iw, ih, g):
+        cols = floor((w + g) / (iw + g)) if iw > 0 else 0
+        rows = floor((h + g) / (ih + g)) if ih > 0 else 0
+        return max(cols, 0) * max(rows, 0)
 
-    SIZE_TYPE_CHOICES = [
-        (PRODUCTION, _("Production")),
-        (FINAL, _("Final")),
-    ]
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(_("name"), max_length=100)
-    width_mm = models.DecimalField(_("width (mm)"), max_digits=10, decimal_places=2)
-    height_mm = models.DecimalField(_("height (mm)"), max_digits=10, decimal_places=2)
-    size_type = models.CharField(
-        _("size type"), max_length=20, choices=SIZE_TYPE_CHOICES
-    )
-
-    class Meta:
-        abstract = True
-        ordering = ["name"]
-
-    def __str__(self):
-        return f"{self.name} ({self.width_mm}×{self.height_mm} mm)"
+    base_fit = fit(av_w, av_h, it_w, it_h, gutter)
+    if allow_rotation:
+        rot_fit = fit(av_w, av_h, it_h, it_w, gutter)
+        return max(base_fit, rot_fit)
+    return base_fit
 
 
 # -------------------------------------------------------------------
-# PAPER SIZES
+# ITEM PER SHEET CALCULATION
 # -------------------------------------------------------------------
-class ProductionPaperSize(BaseSize):
-    """Represents the actual production sheet sizes (e.g., SRA3, B2)."""
-
-    class Meta(BaseSize.Meta):
-        verbose_name = _("Printing paper size")
-        verbose_name_plural = _("Printing paper sizes")
-        unique_together = ("name", "width_mm", "height_mm")
-
-
-class FinalPaperSize(BaseSize):
-    """Represents customer-facing sizes (e.g., Business Card, A3)."""
-
-    class Meta(BaseSize.Meta):
-        verbose_name = _("Final size")
-        verbose_name_plural = _("Final sizes")
-        unique_together = ("name", "width_mm", "height_mm")
+def items_per_sheet(
+    sheet_w_mm: Decimal,
+    sheet_h_mm: Decimal,
+    item_w_mm: Decimal,
+    item_h_mm: Decimal,
+    bleed_mm: Decimal = Decimal("0"),
+    gutter_mm: Decimal = Decimal("0"),
+    allow_rotation: bool = True,
+) -> int:
+    """Compute how many finished items can be imposed on one production sheet."""
+    sheet_w = _to_decimal(sheet_w_mm)
+    sheet_h = _to_decimal(sheet_h_mm)
+    item_w = _to_decimal(item_w_mm) + (bleed_mm * 2)
+    item_h = _to_decimal(item_h_mm) + (bleed_mm * 2)
+    gutter = _to_decimal(gutter_mm)
+    return grid_count(sheet_w, sheet_h, item_w, item_h, gutter, allow_rotation)
 
 
 # -------------------------------------------------------------------
-# MATERIALS
+# SHEETS NEEDED
 # -------------------------------------------------------------------
-class PaperType(models.Model):
+def sheets_needed(quantity: int, items_per_sheet: int) -> int:
+    """Return number of sheets required to print `quantity` items given `items_per_sheet`."""
+    if items_per_sheet <= 0:
+        items_per_sheet = 1
+    return ceil(quantity / items_per_sheet)
+
+
+# -------------------------------------------------------------------
+# BOOKLET IMPOSITION
+# -------------------------------------------------------------------
+def booklet_imposition(
+    quantity: int,
+    page_count: int,
+    allow_rotation: bool = False,
+) -> int:
+    """Calculate total inner sheets needed for a booklet."""
+    if page_count % 4 != 0:
+        page_count += (4 - (page_count % 4))
+    if page_count <= 4:
+        return quantity
+    pages = page_count - 4
+    sheets_per_copy = ceil(pages / 4)
+    return quantity * sheets_per_copy
+
+
+# -------------------------------------------------------------------
+# JOB SHORTCUTS — LAZY IMPORT FIX 👇
+# -------------------------------------------------------------------
+def get_job_items_per_sheet(job):
     """
-    Represents paper stocks and materials used in digital printing.
-    Example: 130gsm Gloss Coated, 250gsm Matte, etc.
+    Shortcut to calculate imposition for a deliverable using its own attributes.
+    Lazy import avoids circular dependency.
     """
+    from orders.models import JobDeliverable  # lazy import
+    sheet = job.material.size
+    final_size = job.size
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(_("name"), max_length=150)
-    gsm = models.PositiveIntegerField(_("gsm"))
-    is_coated = models.BooleanField(_("is coated"), default=False)
-    color = models.CharField(_("color"), max_length=50, blank=True)
-    is_banner = models.BooleanField(
-        default=False, help_text=_("True if this is banner material")
-    )
-    is_special = models.BooleanField(
-        default=False, help_text=_("True if this is a special material like Tic Tac")
-    )
-
-    size = models.ForeignKey(
-        ProductionPaperSize,
-        on_delete=models.SET_NULL,
-        blank=True,
-        null=True,
-        help_text=_("Default sheet size"),
+    return items_per_sheet(
+        sheet_w_mm=sheet.width_mm,
+        sheet_h_mm=sheet.height_mm,
+        item_w_mm=final_size.width_mm,
+        item_h_mm=final_size.height_mm,
+        bleed_mm=_to_decimal(job.bleed_mm),
+        gutter_mm=_to_decimal(job.gutter_mm),
+        allow_rotation=True,
     )
 
 
-    class Meta:
-        verbose_name = _("Digital paper type")
-        verbose_name_plural = _("Digital paper types")
-        unique_together = ("name", "gsm")
-
-    def __str__(self):
-        return f"{self.name} {self.gsm}gsm"
+def get_job_sheets_needed(job):
+    """Shortcut for total sheets required for a flat job deliverable."""
+    from orders.models import JobDeliverable  # lazy import
+    ips = get_job_items_per_sheet(job)
+    return sheets_needed(job.quantity, ips)
 
 
-class LargeFormatMaterial(models.Model):
+# engine/services/costs.py
+from decimal import Decimal, ROUND_HALF_UP
+from typing import Dict, Optional
+from types import SimpleNamespace
+
+from .impositions import sheets_needed, _to_decimal
+from pricing.models import DigitalPrintPrice
+# ❌ remove this:
+# from orders.models import JobDeliverable
+
+
+# -------------------------------------------------------------------
+# CURRENCY FORMATTING
+# -------------------------------------------------------------------
+def _format_currency(amount: Decimal, currency: str = "KES") -> str:
+    amount = (amount or Decimal("0.00")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return f"{currency} {amount:,}"
+
+
+# -------------------------------------------------------------------
+# SIDEDNESS LOGIC
+# -------------------------------------------------------------------
+def _get_price_per_sheet(price_obj: DigitalPrintPrice, sidedness: str) -> Decimal:
+    sidedness = (sidedness or "").lower()
+    if sidedness == "double":
+        return _to_decimal(price_obj.double_side_price)
+    return _to_decimal(price_obj.single_side_price)
+
+
+# -------------------------------------------------------------------
+# PRICE FINDER
+# -------------------------------------------------------------------
+def _find_price_for_job(job) -> Optional[DigitalPrintPrice]:
+    from orders.models import JobDeliverable   # ✅ lazy import
+
+    if not isinstance(job, JobDeliverable):
+        raise TypeError("Expected a JobDeliverable instance")
+
+    return (
+        DigitalPrintPrice.objects
+        .filter(
+            machine=job.machine,
+            paper_type=job.material,
+            company=job.company
+        )
+        .first()
+    )
+
+
+# -------------------------------------------------------------------
+# DIGITAL PRINT COST CALCULATION
+# -------------------------------------------------------------------
+def calculate_digital_print_cost(job, price_obj: Optional[DigitalPrintPrice] = None, sheet_count: Optional[int] = None) -> Dict[str, any]:
+    from orders.models import JobDeliverable   # ✅ lazy import again
+
+    if not isinstance(job, JobDeliverable):
+        raise TypeError("Expected a JobDeliverable instance")
+
+    # 1️⃣ Resolve pricing object
+    if price_obj is None:
+        price_obj = _find_price_for_job(job)
+    if price_obj is None:
+        return {"total": Decimal("0.00"), "currency": "KES", "error": "No price found"}
+
+    currency = price_obj.currency
+
+    # 2️⃣ Resolve sheet count
+    if sheet_count is None:
+        sheet_count = job.sheet_count or 0
+    if sheet_count <= 0:
+        ips = job.items_per_sheet or 1
+        sheet_count = sheets_needed(job.quantity, ips)
+
+    # 3️⃣ Price per sheet
+    unit_price = _get_price_per_sheet(price_obj, job.sidedness)
+
+    # 4️⃣ Compute total
+    total = unit_price * _to_decimal(sheet_count)
+
+    # 5️⃣ Minimum charge
+    minimum = _to_decimal(price_obj.minimum_charge)
+    if total < minimum:
+        total = minimum
+
+    return {
+        "sheets": sheet_count,
+        "unit_price": unit_price,
+        "minimum_charge": minimum,
+        "currency": currency,
+        "total": total,
+        "formatted": _format_currency(total, currency),
+        "pricing_source": price_obj.id,
+    }
+
+
+from decimal import Decimal
+from engine.services import impositions
+
+def compute_total_cost(deliverable, price_obj=None):
     """
-    Represents materials used in large format printing.
-    Example: Vinyl, PVC, Canvas, Fabric, Acrylic, etc.
+    Compute total printing cost for a deliverable.
+    Uses DigitalPrintPrice rows (single_side_price / double_side_price).
     """
+    # safe lazy import for model (handles odd file placement)
+    try:
+        from pricing.models import DigitalPrintPrice
+    except Exception:
+        try:
+            from pricing.admin import DigitalPrintPrice
+        except Exception:
+            DigitalPrintPrice = None
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(_("name"), max_length=150, unique=True)
-    material_type = models.CharField(_("material type"), max_length=100)
-    thickness_mm = models.DecimalField(
-        _("thickness (mm)"),
-        max_digits=5,
-        decimal_places=2,
-        blank=True,
-        null=True,
-    )
-    width_mm = models.DecimalField(
-        _("width (mm)"),
-        max_digits=10,
-        decimal_places=2,
-        help_text=_("The total width of the material in mm."),
-    )
+    qty = getattr(deliverable, "quantity", 0) or 0
+    final_size = getattr(deliverable, "size", None)
 
-    class Meta:
-        verbose_name = _("Large format material")
-        verbose_name_plural = _("Large format materials")
-        unique_together = ("name", "width_mm")
+    # Accept both inner_machine / machine and inner_material / material
+    machine = getattr(deliverable, "inner_machine", None) or getattr(deliverable, "machine", None)
+    paper = getattr(deliverable, "inner_material", None) or getattr(deliverable, "material", None)
 
-    def __str__(self):
-        return f"{self.name} ({self.material_type})"
+    bleed = getattr(deliverable, "bleed_mm", 3)
+    gutter = getattr(deliverable, "gutter_mm", 5)
+    margin = getattr(deliverable, "gripper_mm", 10)
 
+    if not final_size or not machine or not paper:
+        return {
+            "total_cost": Decimal("0.00"),
+            "total_cost_formatted": "KES 0.00",
+            "details": "Missing machine, paper, or size"
+        }
 
-class UVDTFMaterial(models.Model):
-    """
-    Represents materials for UV DTF (Direct to Film) printing.
-    Example: A/B Film, Transparent Film, Matte Film, etc.
-    """
+    # 1) How many items fit per sheet (use machine's sheet dims)
+    # Ensure machine has sheet_width_mm / sheet_height_mm attributes (or fallback to supported size)
+    sheet_w = getattr(machine, "sheet_width_mm", None)
+    sheet_h = getattr(machine, "sheet_height_mm", None)
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(_("name"), max_length=150, unique=True)
-    finish = models.CharField(_("finish"), max_length=100, blank=True)
+    if sheet_w is None or sheet_h is None:
+        # attempt to pick first supported size object
+        try:
+            first_supported = machine.supported_sizes.first()
+            if first_supported:
+                sheet_w = first_supported.width_mm
+                sheet_h = first_supported.height_mm
+        except Exception:
+            sheet_w = None
+            sheet_h = None
 
-    class Meta:
-        verbose_name = _("UV DTF material")
-        verbose_name_plural = _("UV DTF materials")
+    if sheet_w is None or sheet_h is None:
+        return {
+            "total_cost": Decimal("0.00"),
+            "total_cost_formatted": "KES 0.00",
+            "details": "Machine production sheet size unknown"
+        }
 
-    def __str__(self):
-        return self.name
-
-
-#papers/admin.py
-from django.contrib import admin
-from .models import (
-    ProductionPaperSize,
-    FinalPaperSize,
-    PaperType,
-    LargeFormatMaterial,
-    UVDTFMaterial,
-)
-
-# A base admin class for shared paper size configurations
-class BaseSizeAdmin(admin.ModelAdmin):
-    """Base admin configuration for paper size models."""
-    list_display = ('name', 'width_mm', 'height_mm')
-    search_fields = ('name',)
-    ordering = ('name',)
-    
-    # Organize fields into sections for a cleaner form
-    fieldsets = (
-        (None, {
-            'fields': ('name', ('width_mm', 'height_mm'))
-        }),
+    per_sheet = impositions.items_per_sheet(
+        sheet_w_mm=sheet_w,
+        sheet_h_mm=sheet_h,
+        item_w_mm=final_size.width_mm,
+        item_h_mm=final_size.height_mm,
+        bleed_mm=bleed,
+        gutter_mm=gutter,
+        margin_mm=margin,
     )
 
-    def save_model(self, request, obj, form, change):
-        """
-        Automatically sets the size_type based on the model.
-        This field is defined in the abstract BaseSize model but is not
-        meant to be edited by the user in the admin panel.
-        """
-        if isinstance(obj, ProductionPaperSize):
-            obj.size_type = self.model.PRODUCTION
-        elif isinstance(obj, FinalPaperSize):
-            obj.size_type = self.model.FINAL
-        super().save_model(request, obj, form, change)
+    if per_sheet <= 0:
+        return {
+            "total_cost": Decimal("0.00"),
+            "total_cost_formatted": "KES 0.00",
+            "details": "Item does not fit on production sheet"
+        }
 
-@admin.register(ProductionPaperSize)
-class ProductionPaperSizeAdmin(BaseSizeAdmin):
-    """Admin configuration for Production Paper Sizes."""
-    pass
+    # 2) Compute sheets needed
+    sheets = impositions.sheets_needed(qty, per_sheet)
 
-@admin.register(FinalPaperSize)
-class FinalPaperSizeAdmin(BaseSizeAdmin):
-    """Admin configuration for Final Paper Sizes."""
-    pass
+    # If Pricing model is not importable, bail
+    if DigitalPrintPrice is None:
+        return {
+            "total_cost": Decimal("0.00"),
+            "total_cost_formatted": "KES 0.00",
+            "details": "Pricing model unavailable"
+        }
 
-@admin.register(PaperType)
-class PaperTypeAdmin(admin.ModelAdmin):
-    """Admin configuration for Digital Paper Types."""
-    list_display = ('name', 'gsm', 'is_coated', 'is_banner', 'is_special')
-    list_filter = ('is_coated', 'is_banner', 'is_special')
-    search_fields = ('name', 'gsm')
-    ordering = ('name', 'gsm')
-
-    fieldsets = (
-        (None, {
-            'fields': ('name', 'gsm')
-        }),
-        ('Properties', {
-            'fields': ('is_coated', 'color')
-        }),
-        ('Special Types', {
-            'description': "Flags for special material types.",
-            'fields': ('is_banner', 'is_special')
-        }),
+    # 3) Try to find a matching price row.
+    # Prefer exact match machine + paper_type (paper field in model is 'paper_type')
+    price_row = (
+        DigitalPrintPrice.objects
+        .filter(machine=machine, paper_type=paper)
+        .first()
     )
 
-@admin.register(LargeFormatMaterial)
-class LargeFormatMaterialAdmin(admin.ModelAdmin):
-    """Admin configuration for Large Format Materials."""
-    list_display = ('name', 'material_type', 'thickness_mm', 'width_mm')
-    list_filter = ('material_type',)
-    search_fields = ('name', 'material_type')
-    ordering = ('name',)
-    
-    fieldsets = (
-        (None, {
-            'fields': ('name', 'material_type')
-        }),
-        ('Specifications (mm)', {
-            'fields': (('thickness_mm', 'width_mm'),)
-        }),
-    )
-
-@admin.register(UVDTFMaterial)
-class UVDTFMaterialAdmin(admin.ModelAdmin):
-    """Admin configuration for UV DTF Materials."""
-    list_display = ('name', 'finish')
-    search_fields = ('name', 'finish')
-    ordering = ('name',)
-
-
-#machines/models  
-import uuid
-from django.db import models
-from django.utils.text import slugify
-from django.utils.translation import gettext_lazy as _
-from core.models import PrintCompany
-
-from papers.models import ProductionPaperSize
-
-    
-class MachineType(models.TextChoices):
-    DIGITAL = "DIGITAL", _("Digital Press")
-    OFFSET = "OFFSET", _("Offset Press")
-    SCREEN = "SCREEN", _("Screen Printer")
-    LARGE_FORMAT = "LARGE_FORMAT", _("Large Format Printer")
-    UV_DTF = "UV_DTF", _("UV DTF Printer")
-    UV_FLATBED = "UV_FLA", _("UV Flatbed Printer")
-    FLATBED = "FLATBED", _("Flatbed Printer")
-    LASER = "LASER", _("Laser Printer")
-    ROUTER = "ROUTER", _("Router Printer")
-    LAMINATOR = "LAMINATOR", _("Lamination Machine")
-    UV = "UV", _("UV Lamination Machine")
-    BINDING = "BINDING", _("Binding Machine")
-    CUTTER = "CUTTER", _("Cutter")
-    FINISHING = "FINISHING", _("Finishing Machine")
-    OTHER = "OTHER", _("Other")
-    
-class Machine(models.Model):
-    """
-    Represents a specific machine within a print company.
-    """
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name='machines')
-    name = models.CharField(max_length=100, help_text=_("A recognizable name for the machine, e.g., 'HP Indigo' or 'Main Laminator'."))
-    machine_type = models.CharField(max_length=50, choices=MachineType.choices, default=MachineType.DIGITAL)
-    supported_sizes = models.ManyToManyField(
-        ProductionPaperSize,
-        related_name="supported_machines",
-        blank=True,
-        verbose_name=_("Supported standard sizes")
-    )
-    supports_client_custom_size = models.BooleanField(
-        default=False,
-        verbose_name=_("Supports custom sizes")
-    )
-
-    class Meta:
-        unique_together = ('company', 'name')
-        verbose_name = _("Machine")
-        verbose_name_plural = _("Machines")
-
-    def __str__(self):
-        return f"{self.name} ({self.get_machine_type_display()})"
-
-
-#machines/admin.py
-from django.contrib import admin
-from .models import Machine, MachineType
-
-
-@admin.register(Machine)
-class MachineAdmin(admin.ModelAdmin):
-    """Admin configuration for Machines."""
-    list_display = ('name', 'company', 'machine_type')
-    list_filter = ('company', 'machine_type')
-    search_fields = ('name', 'company__name')
-    ordering = ('company', 'name')
-    
-    # Use autocomplete for the company foreign key for better performance
-    autocomplete_fields = ('company',)
-    
-    # Use a more user-friendly interface for the many-to-many relationship
-    filter_horizontal = ('supported_sizes',)
-    
-    # Organize the form fields into logical sections
-    fieldsets = (
-        (None, {
-            'fields': ('company', 'name', 'machine_type')
-        }),
-        ('Size Capabilities', {
-            'description': "Select the standard sizes this machine supports, or allow custom sizes.",
-            'fields': ('supported_sizes', 'supports_client_custom_size')
-        }),
-    )
-
-
-
-#pricing/admin.py
-import uuid
-from django.db import models
-from django.utils.translation import gettext_lazy as _
-from core.models import PrintCompany
-from papers.models import PaperType
-from machines.models import Machine, MachineType
-
-
-class DigitalPrintPrice(models.Model):
-    """
-    Holds single- and double-sided print prices for a given paper type
-    on a specific digital press.
-    """
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    company = models.ForeignKey(
-        PrintCompany,
-        on_delete=models.CASCADE,
-        related_name="digital_print_prices",
-        help_text=_("The company this pricing belongs to."),
-    )
-    machine = models.ForeignKey(
-        Machine,
-        on_delete=models.CASCADE,
-        related_name="digital_prices",
-        limit_choices_to={"machine_type": MachineType.DIGITAL},
-        help_text=_("The digital press this pricing applies to."),
-    )
-    paper_type = models.ForeignKey(
-        PaperType,
-        on_delete=models.CASCADE,
-        related_name="digital_prices",
-        help_text=_("The paper stock this pricing applies to."),
-    )
-    single_side_price = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        help_text=_("Price per sheet (single-sided)."),
-    )
-    double_side_price = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        help_text=_("Price per sheet (double-sided)."),
-    )
-    currency = models.CharField(
-        max_length=10,
-        default="KES",
-        help_text=_("Currency for the pricing (e.g., KES, USD)."),
-    )
-    minimum_charge = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        default=0,
-        help_text=_("The minimum total charge for any job using this price."),
-    )
-
-    class Meta:
-        unique_together = ("machine", "paper_type")
-        verbose_name = _("Digital Print Price")
-        verbose_name_plural = _("Digital Print Prices")
-        ordering = ["paper_type__name"]
-
-    def __str__(self):
-        return (
-            f"{self.machine.name} - {self.paper_type.name}: "
-            f"Single {self.single_side_price}{self.currency}, "
-            f"Double {self.double_side_price}{self.currency}"
+    # fallback to match by machine + size (if price.size exists)
+    if not price_row:
+        price_row = (
+            DigitalPrintPrice.objects
+            .filter(machine=machine, size=getattr(paper, "size", None))
+            .first()
         )
 
+    # fallback to any price for the machine
+    if not price_row:
+        price_row = DigitalPrintPrice.objects.filter(machine=machine).first()
 
-class LargeFormatPrintPrice(models.Model):
+    if not price_row:
+        return {
+            "total_cost": Decimal("0.00"),
+            "total_cost_formatted": "KES 0.00",
+            "details": "No pricing found for this machine-paper combination"
+        }
+
+    # Determine sidedness and choose proper per-sheet price
+    sided = getattr(deliverable, "sidedness", None)
+    sided_code = str(sided).lower() if sided is not None else ""
+    if sided_code in ("s2", "double", "d", "duplex", "2", "two"):
+        pps = getattr(price_row, "double_side_price", None) or getattr(price_row, "single_side_price", None)
+    else:
+        pps = getattr(price_row, "single_side_price", None) or getattr(price_row, "double_side_price", None)
+
+    if pps in (None, 0, "", Decimal("0")):
+        return {
+            "total_cost": Decimal("0.00"),
+            "total_cost_formatted": "KES 0.00",
+            "details": "No usable per-sheet price found on matched price row"
+        }
+
+    price_per_sheet = Decimal(str(pps))
+    total_cost = (Decimal(sheets) * price_per_sheet).quantize(Decimal("0.01"))
+
+    return {
+        "total_cost": total_cost,
+        "total_cost_formatted": f"KES {total_cost:,.2f}",
+        "details": f"{sheets} sheets × KES {price_per_sheet:,.2f} per sheet"
+    }
+
+# engine/services/summaries.py
+"""
+Production summary + short cost snippet using the direct-price cost service.
+"""
+
+from typing import Optional
+from engine.services.impositions import items_per_sheet
+
+
+# -------------------------------------------------------------------
+# FIND SRA3 OR ALTERNATIVE SHEET SIZE
+# -------------------------------------------------------------------
+def _find_sra3():
     """
-    Defines price per square meter for a specific roll-fed material
-    used in large format printing.
+    Attempt to find a ProductionPaperSize object for SRA3 or a close match.
+    We lazy import to avoid circular import on startup.
     """
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name="large_format_prices")
-    machine = models.ForeignKey(
-        Machine,
-        on_delete=models.CASCADE,
-        related_name="large_format_prices",
-        limit_choices_to={"machine_type": MachineType.LARGE_FORMAT},
-    )
-    material = models.ForeignKey("papers.LargeFormatMaterial", on_delete=models.CASCADE, related_name="prices")
+    from papers.models import ProductionPaperSize
 
-    roll_width_m = models.DecimalField(max_digits=5, decimal_places=2, help_text=_("Width of the roll in meters."))
-    price_per_sq_meter = models.DecimalField(max_digits=10, decimal_places=2)
-    currency = models.CharField(max_length=10, default="KES")
-    minimum_charge = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    qs = ProductionPaperSize.objects.filter(name__iexact="SRA3")
+    if qs.exists():
+        return qs.first()
 
-    class Meta:
-        unique_together = ("machine", "material", "roll_width_m")
+    qs = ProductionPaperSize.objects.filter(name__icontains="sra")
+    for p in qs:
+        n = (p.name or "").lower()
+        if "3" in n or "iii" in n:
+            return p
+    return None
 
-    def __str__(self):
-        return f"{self.machine.name} - {self.material.name} ({self.roll_width_m}m): {self.price_per_sq_meter}{self.currency}/sqm"
 
-class OffsetPlatePrice(models.Model):
+# -------------------------------------------------------------------
+# SHEET SIZE RESOLVER
+# -------------------------------------------------------------------
+def _resolve_sheet_for_deliverable(deliverable):
     """
-    One-time setup cost per plate for offset printing.
+    Try to find the sheet used to print a deliverable.
+    Priority:
+      1) deliverable.print_price.size
+      2) SRA3 fallback
+      3) machine.supported_sizes.first()
+      4) material.size
     """
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name="offset_plate_prices")
-    name = models.CharField(max_length=100, help_text=_("e.g., 'A3+ Plate'"))
-    setup_cost = models.DecimalField(max_digits=10, decimal_places=2)
+    # 1) price size
+    price_obj = getattr(deliverable, "print_price", None)
+    if price_obj is not None and getattr(price_obj, "size", None) is not None:
+        return price_obj.size, "price.size"
 
-    def __str__(self):
-        return f"{self.name} ({self.setup_cost} KES)"
+    # 2) sra3 fallback
+    sra3 = _find_sra3()
+    if sra3:
+        return sra3, "SRA3"
+
+    # 3) machine supported sizes
+    machine = getattr(deliverable, "machine", None)
+    if machine and hasattr(machine, "supported_sizes"):
+        try:
+            first_supported = machine.supported_sizes.first()
+        except Exception:
+            first_supported = None
+        if first_supported:
+            return first_supported, "machine.supported_size"
+
+    # 4) material size
+    mat = getattr(deliverable, "material", None)
+    if mat:
+        try:
+            mat_size = getattr(mat, "size", None)
+        except Exception:
+            mat_size = None
+        if mat_size:
+            return mat_size, "material.size"
+
+    return None, "none"
 
 
-class OffsetRunPrice(models.Model):
+# -------------------------------------------------------------------
+# MAIN SUMMARY
+# -------------------------------------------------------------------
+def deliverable_summary(deliverable) -> str:
     """
-    Per-sheet running cost for a given paper type on a specific offset press.
+    Human readable production summary and short cost snippet (direct-price only).
+    Example output:
+      "Business Cards: 12 pcs fit per SRA3 ... Estimated cost: KES 2,000.00."
     """
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name="offset_run_prices")
-    machine = models.ForeignKey(
-        Machine,
-        on_delete=models.CASCADE,
-        related_name="offset_run_prices",
-        limit_choices_to={"machine_type": MachineType.OFFSET},
-    )
-    paper_type = models.ForeignKey(PaperType, on_delete=models.CASCADE, related_name="offset_run_prices")
+    name = getattr(deliverable, "name", "Deliverable")
+    qty = getattr(deliverable, "quantity", 0)
 
-    price_per_sheet_per_color = models.DecimalField(max_digits=10, decimal_places=4)
-    currency = models.CharField(max_length=10, default="KES")
-    minimum_charge = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    # --- get final size
+    final_size = getattr(deliverable, "size", None)
+    final_w = getattr(final_size, "width_mm", None) if final_size else None
+    final_h = getattr(final_size, "height_mm", None) if final_size else None
 
-    class Meta:
-        unique_together = ("machine", "paper_type")
+    # --- print params
+    bleed = getattr(deliverable, "bleed_mm", 3)
+    gutter = getattr(deliverable, "gutter_mm", 5)
+    gripper = getattr(deliverable, "gripper_mm", 10)
 
-    def __str__(self):
-        return f"{self.machine.name} - {self.paper_type.name}: {self.price_per_sheet_per_color}{self.currency}/sheet/color"
+    # --- resolve sheet
+    sheet, source = _resolve_sheet_for_deliverable(deliverable)
+    if sheet is None:
+        return f"{name}: Could not resolve a production sheet size (no price.size, SRA3, machine or material size). Quantity: {qty}."
 
+    # --- booklet?
+    is_booklet = bool(getattr(deliverable, "is_booklet", False))
+    if is_booklet:
+        try:
+            from engine.services.costs import compute_sheets_for_deliverable, compute_total_cost
+        except Exception:
+            return f"{name}: Booklet (cost/imposition services unavailable)."
 
-class ScreenSetupPrice(models.Model):
-    """
-    One-time cost to create a screen (per color).
-    """
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name="screen_setup_prices")
-    name = models.CharField(max_length=100, help_text=_("e.g., 'Standard A3 Screen'"))
-    setup_cost = models.DecimalField(max_digits=10, decimal_places=2)
+        sheets_info = compute_sheets_for_deliverable(deliverable, price_obj=getattr(deliverable, "print_price", None))
+        pages = int(getattr(deliverable, "page_count", 0) or 0)
+        inner = sheets_info.get("sheets", 0) or 0
+        cover = sheets_info.get("cover_sheets", 0) or 0
+        total = sheets_info.get("total_physical_sheets", inner + cover)
 
-    def __str__(self):
-        return f"{self.name} ({self.setup_cost} KES)"
+        base_msg = f"{name}: {pages}pp saddle-stitched. Inner run: {inner} sheet(s). Cover run: {cover} sheet(s). Total physical sheets: {total} (sheet source: {source})."
 
+        try:
+            cost = compute_total_cost(deliverable, getattr(deliverable, "print_price", None))
+            return base_msg + f" Estimated cost: {cost.get('total_cost_formatted', 'KES 0.00')}."
+        except Exception:
+            return base_msg
 
-class ScreenRunPrice(models.Model):
-    """
-    Running cost per item for screen printing.
-    """
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name="screen_run_prices")
-    machine = models.ForeignKey(
-        Machine,
-        on_delete=models.CASCADE,
-        related_name="screen_run_prices",
-        limit_choices_to={"machine_type": MachineType.SCREEN},
-    )
-    run_cost_per_item_per_color = models.DecimalField(max_digits=10, decimal_places=2)
-    currency = models.CharField(max_length=10, default="KES")
-    minimum_charge = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-
-    def __str__(self):
-        return f"{self.machine.name}: {self.run_cost_per_item_per_color}{self.currency}/item/color"
-
-class UVDTFPrintPrice(models.Model):
-    """
-    Defines UV DTF film and its price per square meter.
-    """
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name="uvdtf_print_prices")
-    machine = models.ForeignKey(
-        Machine,
-        on_delete=models.CASCADE,
-        related_name="uvdtf_prices",
-        limit_choices_to={"machine_type": MachineType.UV_DTF},
-    )
-    material = models.ForeignKey("papers.UVDTFMaterial", on_delete=models.CASCADE, related_name="prices")
-
-    price_per_sq_meter = models.DecimalField(max_digits=10, decimal_places=2)
-    currency = models.CharField(max_length=10, default="KES")
-    minimum_charge = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-
-    def __str__(self):
-        return f"{self.machine.name} - {self.material.name}: {self.price_per_sq_meter}{self.currency}/sqm"
-
-class FinishingService(models.Model):
-    """
-    Post-print finishing service (simple or tiered pricing).
-    """
-    class CalculationMethod(models.TextChoices):
-        PER_SHEET_SINGLE_SIDED = "PER_SHEET_SINGLE", _("Per Sheet (Single Side)")
-        PER_SHEET_DOUBLE_SIDED = "PER_SHEET_DOUBLE", _("Per Sheet (Double Side)")
-        PER_ITEM = "PER_ITEM", _("Per Final Item")
-        PER_SQ_METER = "PER_SQ_METER", _("Per Square Meter")
-
-    class PricingMethod(models.TextChoices):
-        SIMPLE = "SIMPLE", _("Simple Price")
-        TIERED = "TIERED", _("Tiered by Quantity")
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name="finishing_services")
-    name = models.CharField(max_length=100)
-
-    pricing_method = models.CharField(max_length=10, choices=PricingMethod.choices, default=PricingMethod.SIMPLE)
-    calculation_method = models.CharField(max_length=20, choices=CalculationMethod.choices)
-
-    simple_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    currency = models.CharField(max_length=10, default="KES")
-    minimum_charge = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-
-    class Meta:
-        unique_together = ("company", "name")
-
-    def __str__(self):
-        return self.name
-
-
-class TieredFinishingPrice(models.Model):
-    """
-    Quantity-based price tiers for finishing services.
-    """
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    service = models.ForeignKey(FinishingService, on_delete=models.CASCADE, related_name="tiered_prices")
-    min_quantity = models.PositiveIntegerField()
-    max_quantity = models.PositiveIntegerField()
-    price = models.DecimalField(max_digits=10, decimal_places=2)
-    currency = models.CharField(max_length=10, default="KES")
-
-    class Meta:
-        ordering = ["min_quantity"]
-
-    def __str__(self):
-        return f"{self.service.name}: {self.min_quantity}-{self.max_quantity} @ {self.price}{self.currency}"
-    
-#pricing/admin.py
-from django.contrib import admin
-from .models import (
-    DigitalPrintPrice,
-    LargeFormatPrintPrice,
-    OffsetPlatePrice,
-    OffsetRunPrice,
-    ScreenSetupPrice,
-    ScreenRunPrice,
-    UVDTFPrintPrice,
-    FinishingService,
-    TieredFinishingPrice,
-)
-
-# A base admin class for shared price model configurations
-class BasePriceAdmin(admin.ModelAdmin):
-    """Base admin configuration for common price models."""
-    list_display = ('company', 'machine', 'minimum_charge', 'currency')
-    list_filter = ('company', 'machine', 'currency')
-    search_fields = ('company__name', 'machine__name')
-    autocomplete_fields = ('company', 'machine')
-    ordering = ('company',)
-
-@admin.register(DigitalPrintPrice)
-class DigitalPrintPriceAdmin(BasePriceAdmin):
-    """Admin configuration for Digital Print Prices."""
-    list_display = ('paper_type', 'machine', 'single_side_price', 'double_side_price', 'company')
-    list_filter = ('company', 'machine', 'currency', 'paper_type')
-    search_fields = ('company__name', 'machine__name', 'paper_type__name')
-    autocomplete_fields = ('company', 'machine', 'paper_type')
-    ordering = ('paper_type__name',)
-
-    fieldsets = (
-        (None, {
-            'fields': ('company', 'machine', 'paper_type')
-        }),
-        ('Pricing', {
-            'fields': (('single_side_price', 'double_side_price'), 'minimum_charge', 'currency')
-        }),
+    # --- flat job imposition
+    items = items_per_sheet(
+        sheet_w_mm=getattr(sheet, "width_mm", 0),
+        sheet_h_mm=getattr(sheet, "height_mm", 0),
+        item_w_mm=final_w or 0,
+        item_h_mm=final_h or 0,
+        bleed_mm=bleed,
+        gutter_mm=gutter,
     )
 
-@admin.register(LargeFormatPrintPrice)
-class LargeFormatPrintPriceAdmin(BasePriceAdmin):
-    """Admin configuration for Large Format Print Prices."""
-    list_display = ('material', 'machine', 'price_per_sq_meter', 'roll_width_m', 'company')
-    list_filter = ('company', 'machine', 'currency', 'material')
-    search_fields = ('company__name', 'machine__name', 'material__name')
-    autocomplete_fields = ('company', 'machine', 'material')
-    ordering = ('material__name',)
+    if not items or int(items) <= 0:
+        return f"{name}: Item ({final_w}×{final_h} mm) does NOT fit on {sheet.name} ({sheet.width_mm}×{sheet.height_mm} mm) even after bleed."
 
-@admin.register(OffsetRunPrice)
-class OffsetRunPriceAdmin(BasePriceAdmin):
-    """Admin configuration for Offset Run Prices."""
-    list_display = ('paper_type', 'machine', 'price_per_sheet_per_color', 'company')
-    list_filter = ('company', 'machine', 'currency', 'paper_type')
-    search_fields = ('company__name', 'machine__name', 'paper_type__name')
-    autocomplete_fields = ('company', 'machine', 'paper_type')
-    ordering = ('paper_type__name',)
+    import math
+    sheets = math.ceil(qty / int(items))
 
-@admin.register(ScreenRunPrice)
-class ScreenRunPriceAdmin(BasePriceAdmin):
-    """Admin configuration for Screen Run Prices."""
-    list_display = ('machine', 'run_cost_per_item_per_color', 'company')
+    # Basic machine & paper info
+    machine = getattr(deliverable, "machine", None)
+    paper = getattr(deliverable, "material", None)
+    sidedness = getattr(deliverable, "sidedness", "??")
+    machine_name = getattr(machine, "name", "None")
+    paper_name = getattr(paper, "name", "None")
+    sheet_name = getattr(sheet, "name", "Unknown")
 
-@admin.register(UVDTFPrintPrice)
-class UVDTFPrintPriceAdmin(BasePriceAdmin):
-    """Admin configuration for UV DTF Print Prices."""
-    list_display = ('material', 'machine', 'price_per_sq_meter', 'company')
-    list_filter = ('company', 'machine', 'currency', 'material')
-    search_fields = ('company__name', 'machine__name', 'material__name')
-    autocomplete_fields = ('company', 'machine', 'material')
-
-# Admin configurations for one-time setup costs
-class BaseSetupPriceAdmin(admin.ModelAdmin):
-    """Base admin for one-time setup costs."""
-    list_display = ('name', 'setup_cost', 'company')
-    list_filter = ('company',)
-    search_fields = ('name', 'company__name')
-    autocomplete_fields = ('company',)
-    ordering = ('name',)
-
-@admin.register(OffsetPlatePrice)
-class OffsetPlatePriceAdmin(BaseSetupPriceAdmin):
-    """Admin configuration for Offset Plate Prices."""
-    pass
-
-@admin.register(ScreenSetupPrice)
-class ScreenSetupPriceAdmin(BaseSetupPriceAdmin):
-    """Admin configuration for Screen Setup Prices."""
-    pass
-
-# Inline editor for tiered pricing on the Finishing Service page
-class TieredFinishingPriceInline(admin.TabularInline):
-    """Allows editing tiered prices directly within the Finishing Service admin."""
-    model = TieredFinishingPrice
-    fields = ('min_quantity', 'max_quantity', 'price', 'currency')
-    extra = 1  # Show one empty row for adding a new tier
-
-@admin.register(FinishingService)
-class FinishingServiceAdmin(admin.ModelAdmin):
-    """Admin configuration for Finishing Services."""
-    list_display = ('name', 'company', 'pricing_method', 'calculation_method', 'simple_price', 'minimum_charge')
-    list_filter = ('company', 'pricing_method', 'calculation_method')
-    search_fields = ('name', 'company__name')
-    autocomplete_fields = ('company',)
-    inlines = [TieredFinishingPriceInline]
-
-    fieldsets = (
-        (None, {
-            'fields': ('company', 'name')
-        }),
-        ('Pricing Logic', {
-            'description': "Select 'Simple' to use the 'Simple Price' field below. Select 'Tiered' to add price rows in the 'Tiered Prices' section.",
-            'fields': ('pricing_method', 'calculation_method')
-        }),
-        ('Simple Pricing', {
-            'classes': ('collapse',),
-            'fields': ('simple_price', 'minimum_charge', 'currency')
-        }),
+    base_msg = (
+        f"📄 {name}: {int(items)} pcs fit per {sheet_name} "
+        f"({sheet.width_mm}×{sheet.height_mm} mm) | "
+        f"🧮 For {qty} pcs → {sheets} sheet(s). (sheet source: {source})\n"
+        f"🖨 Machine: {machine_name}\n"
+        f"📏 Paper type: {paper_name}\n"
+        f"↔️ Sidedness: {sidedness}\n"
+        f"🧾 Quantity: {qty}\n"
     )
+
+    # -------------------------------------------
+    # 🪙 Pricing lookup and cost calculation
+    # -------------------------------------------
+    try:
+        from printy.models import DigitalPrintPrice  # adjust if your app name is different
+
+        price_obj = DigitalPrintPrice.objects.get(
+            machine=machine,
+            paper_type=paper,
+            company=deliverable.company
+        )
+    except Exception:
+        price_obj = None
+        base_msg += "⚠️ No pricing found for this machine-paper combination.\n"
+
+    if price_obj:
+        # Handle sidedness mapping
+        if str(sidedness).lower().startswith("s"):
+            price_per_sheet = price_obj.single_side_price
+        else:
+            price_per_sheet = price_obj.double_side_price
+
+        total_cost = sheets * price_per_sheet
+
+        # enforce minimum charge if applicable
+        if total_cost < price_obj.minimum_charge:
+            total_cost = price_obj.minimum_charge
+
+        base_msg += (
+            f"💰 Price per sheet: {price_per_sheet:.2f} KES\n"
+            f"🧾 Total: {sheets} × {price_per_sheet:.2f} = {total_cost:.2f} KES\n"
+        )
+
+    return base_msg
+
 
 #orders/models.py
 import uuid
@@ -776,75 +646,25 @@ class JobDeliverable(models.Model):
     One deliverable within an order (e.g., booklet, business cards, flyer).
     Stores client choices and calculates its own price upon saving.
     """
-
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="deliverables")
     name = models.CharField(max_length=120, help_text=_("e.g., 'Book – Title XYZ'"))
     quantity = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
     size = models.ForeignKey(FinalPaperSize, on_delete=models.PROTECT, related_name="deliverables")
-
-    # This field stores the calculated total price.
+    machine = models.ForeignKey(Machine, on_delete=models.PROTECT, related_name="deliverables", limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},    )
+    material = models.ForeignKey(PaperType, on_delete=models.PROTECT, related_name="deliverables", help_text=_("The paper stock this pricing applies to."))
+    sidedness = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.DOUBLE)
     total_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-
-    # Booklet details
     is_booklet = models.BooleanField(default=False)
     page_count = models.PositiveIntegerField(default=1, help_text=_("Total pages including cover if booklet"))
-
-    # Cover specs (booklets only)
-    cover_machine = models.ForeignKey(
-        Machine,
-        null=True,
-        blank=True,
-        on_delete=models.PROTECT,
-        related_name="cover_deliverables",
-        limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},
-    )
-    cover_material = models.ForeignKey(
-        PaperType,
-        null=True,
-        blank=True,
-        on_delete=models.PROTECT,
-        related_name="cover_deliverables",
-    )
+    cover_machine = models.ForeignKey(Machine, null=True,blank=True, on_delete=models.PROTECT, related_name="cover_deliverables", limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},)
+    cover_material = models.ForeignKey(PaperType, null=True, blank=True, on_delete=models.PROTECT, related_name="cover_deliverables", )
     cover_sidedness = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.SINGLE)
-
-    # Inner specs (used for both booklets AND flat jobs)
-    inner_machine = models.ForeignKey(
-        Machine,
-        on_delete=models.PROTECT,
-        related_name="inner_deliverables",
-        limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},
-    )
-    inner_material = models.ForeignKey(
-        PaperType,
-        on_delete=models.PROTECT,
-        related_name="inner_deliverables",
-    )
-    inner_sidedness = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.DOUBLE)
-
-    # Binding & finishing
     binding = models.CharField(max_length=12, choices=BindingType.choices, default=BindingType.NONE)
-    finishings = models.ManyToManyField(
-        "pricing.FinishingService",
-        through="orders.DeliverableFinishing",
-        blank=True,
-        related_name="deliverables",
-    )
-
-    # Optional link to a product template
-    source_template = models.ForeignKey(
-        "products.ProductTemplate",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="deliverables",
-        help_text=_("The product template this deliverable is based on, if any."),
-    )
-
-    # Imposition overrides
+    finishings = models.ManyToManyField("pricing.FinishingService", through="orders.DeliverableFinishing", blank=True, related_name="deliverables",)
+    source_template = models.ForeignKey("products.ProductTemplate", on_delete=models.SET_NULL, null=True, blank=True, related_name="deliverables", help_text=_("The product template this deliverable is based on, if any."),)
     bleed_mm = models.PositiveIntegerField(default=3)
-    gutter_mm = models.PositiveIntegerField(default=5)
-    gripper_mm = models.PositiveIntegerField(default=10)
-
+    gutter_mm = models.PositiveIntegerField(default=2)
+    gripper_mm = models.PositiveIntegerField(default=3)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -859,17 +679,17 @@ class JobDeliverable(models.Model):
 
     def _calculate_booklet_price(self):
         cover_sheets = self._cover_sheets_needed()
-        inner_sheets = self._inner_sheets_needed()
-        return costs.deliverable_total(self, cover_sheets=cover_sheets, inner_sheets=inner_sheets)
+        sheets = self._sheets_needed()
+        return costs.deliverable_total(self, cover_sheets=cover_sheets, sheets=sheets)
 
     def _calculate_flat_price(self):
         """Calculates price for non-booklet items."""
-        if not self.inner_material or not self.inner_material.size or not self.inner_machine:
+        if not self.material or not self.material.size or not self.machine:
             return Decimal("0.00")
 
         items_ps = impositions.items_per_sheet(
-            sheet_w_mm=self.inner_material.size.width_mm,
-            sheet_h_mm=self.inner_material.size.height_mm,
+            sheet_w_mm=self.material.size.width_mm,
+            sheet_h_mm=self.material.size.height_mm,
             item_w_mm=self.size.width_mm,
             item_h_mm=self.size.height_mm,
             bleed_mm=self.bleed_mm,
@@ -878,9 +698,9 @@ class JobDeliverable(models.Model):
         sheets = impositions.sheets_needed(self.quantity, items_ps)
 
         return costs.digital_section_cost(
-            self.inner_machine,
-            self.inner_material,
-            self.inner_sidedness,
+            self.machine,
+            self.material,
+            self.sidedness,
             sheets,
         )
 
@@ -893,12 +713,6 @@ class JobDeliverable(models.Model):
 
         return price.quantize(DECIMAL_QUANT, rounding=ROUND_HALF_UP)
 
-    def save(self, *args, **kwargs):
-        """Override save to automatically calculate the price."""
-        self.total_price = self.calculate_price()
-        super().save(*args, **kwargs)
-
-    # ---------- HELPERS ----------
 
     def _final_dims_mm(self):
         return self.size.width_mm, self.size.height_mm
@@ -908,14 +722,14 @@ class JobDeliverable(models.Model):
             return 0
         return impositions.sheets_needed(self.quantity, 1)
 
-    def _inner_sheets_needed(self) -> int:
-        if not self.inner_machine or not self.inner_material:
+    def _sheets_needed(self) -> int:
+        if not self.machine or not self.material:
             return 0
 
         if not self.is_booklet:
             items_ps = impositions.items_per_sheet(
-                sheet_w_mm=self.inner_material.size.width_mm,
-                sheet_h_mm=self.inner_material.size.height_mm,
+                sheet_w_mm=self.material.size.width_mm,
+                sheet_h_mm=self.material.size.height_mm,
                 item_w_mm=self.size.width_mm,
                 item_h_mm=self.size.height_mm,
                 bleed_mm=self.bleed_mm,
@@ -931,16 +745,55 @@ class JobDeliverable(models.Model):
         if pages <= 4:
             return 0
 
-        inner_pages = pages - 4
-        sheets_per_copy = math.ceil(inner_pages / 4.0)
+        pages = pages - 4
+        sheets_per_copy = math.ceil(pages / 4.0)
         return self.quantity * sheets_per_copy
 
     def production_summary(self) -> str:
         return summaries.deliverable_summary(
             deliverable=self,
             cover_sheets=self._cover_sheets_needed(),
-            inner_sheets=self._inner_sheets_needed(),
+            sheets=self._sheets_needed(),
         )
+        
+
+    self.inner_machine = getattr(self, "inner_machine", None) or getattr(self, "machine", None)
+    self.inner_material = getattr(self, "inner_material", None) or getattr(self, "material", None)
+
+
+    def save(self, *args, **kwargs):
+        # Compute sheet counts using your helpers (safe, non-persistent)
+        try:
+            sheets = int(self._sheets_needed() or 0)
+        except Exception:
+            sheets = 0
+        try:
+            cover_sheets = int(self._cover_sheets_needed() or 0)
+        except Exception:
+            cover_sheets = 0
+
+        # Attach imposition dict in-memory for costs service to read
+        self.imposition = {
+            "sheets": sheets,
+            "cover_sheets": cover_sheets,
+        }
+
+        # Call cost service (which will auto-find a DigitalPrintPrice if print_price missing)
+        try:
+            from engine.services.costs import compute_total_cost
+            info = compute_total_cost(self, getattr(self, "print_price", None))
+            self.total_price = info.get("total_cost", self.total_price or 0)
+        except Exception:
+            # fallback to older calculate_price logic if available
+            try:
+                if hasattr(self, "calculate_price") and callable(getattr(self, "calculate_price")):
+                    self.total_price = self.calculate_price()
+            except Exception:
+                # swallow, don't break save
+                pass
+
+        super().save(*args, **kwargs)
+
 
 
 # -------------------------------------------------------------------
@@ -972,126 +825,3 @@ class DeliverableFinishing(models.Model):
 
     def __str__(self):
         return f"{self.deliverable} – {self.service.name} ({self.get_applies_to_display()})"
-
-
-#pricing/admin.py
-from django.contrib import admin
-from .models import (
-    DigitalPrintPrice,
-    LargeFormatPrintPrice,
-    OffsetPlatePrice,
-    OffsetRunPrice,
-    ScreenSetupPrice,
-    ScreenRunPrice,
-    UVDTFPrintPrice,
-    FinishingService,
-    TieredFinishingPrice,
-)
-
-# A base admin class for shared price model configurations
-class BasePriceAdmin(admin.ModelAdmin):
-    """Base admin configuration for common price models."""
-    list_display = ('company', 'machine', 'minimum_charge', 'currency')
-    list_filter = ('company', 'machine', 'currency')
-    search_fields = ('company__name', 'machine__name')
-    autocomplete_fields = ('company', 'machine')
-    ordering = ('company',)
-
-@admin.register(DigitalPrintPrice)
-class DigitalPrintPriceAdmin(BasePriceAdmin):
-    """Admin configuration for Digital Print Prices."""
-    list_display = ('paper_type', 'machine', 'single_side_price', 'double_side_price', 'company')
-    list_filter = ('company', 'machine', 'currency', 'paper_type')
-    search_fields = ('company__name', 'machine__name', 'paper_type__name')
-    autocomplete_fields = ('company', 'machine', 'paper_type')
-    ordering = ('paper_type__name',)
-
-    fieldsets = (
-        (None, {
-            'fields': ('company', 'machine', 'paper_type')
-        }),
-        ('Pricing', {
-            'fields': (('single_side_price', 'double_side_price'), 'minimum_charge', 'currency')
-        }),
-    )
-
-@admin.register(LargeFormatPrintPrice)
-class LargeFormatPrintPriceAdmin(BasePriceAdmin):
-    """Admin configuration for Large Format Print Prices."""
-    list_display = ('material', 'machine', 'price_per_sq_meter', 'roll_width_m', 'company')
-    list_filter = ('company', 'machine', 'currency', 'material')
-    search_fields = ('company__name', 'machine__name', 'material__name')
-    autocomplete_fields = ('company', 'machine', 'material')
-    ordering = ('material__name',)
-
-@admin.register(OffsetRunPrice)
-class OffsetRunPriceAdmin(BasePriceAdmin):
-    """Admin configuration for Offset Run Prices."""
-    list_display = ('paper_type', 'machine', 'price_per_sheet_per_color', 'company')
-    list_filter = ('company', 'machine', 'currency', 'paper_type')
-    search_fields = ('company__name', 'machine__name', 'paper_type__name')
-    autocomplete_fields = ('company', 'machine', 'paper_type')
-    ordering = ('paper_type__name',)
-
-@admin.register(ScreenRunPrice)
-class ScreenRunPriceAdmin(BasePriceAdmin):
-    """Admin configuration for Screen Run Prices."""
-    list_display = ('machine', 'run_cost_per_item_per_color', 'company')
-
-@admin.register(UVDTFPrintPrice)
-class UVDTFPrintPriceAdmin(BasePriceAdmin):
-    """Admin configuration for UV DTF Print Prices."""
-    list_display = ('material', 'machine', 'price_per_sq_meter', 'company')
-    list_filter = ('company', 'machine', 'currency', 'material')
-    search_fields = ('company__name', 'machine__name', 'material__name')
-    autocomplete_fields = ('company', 'machine', 'material')
-
-# Admin configurations for one-time setup costs
-class BaseSetupPriceAdmin(admin.ModelAdmin):
-    """Base admin for one-time setup costs."""
-    list_display = ('name', 'setup_cost', 'company')
-    list_filter = ('company',)
-    search_fields = ('name', 'company__name')
-    autocomplete_fields = ('company',)
-    ordering = ('name',)
-
-@admin.register(OffsetPlatePrice)
-class OffsetPlatePriceAdmin(BaseSetupPriceAdmin):
-    """Admin configuration for Offset Plate Prices."""
-    pass
-
-@admin.register(ScreenSetupPrice)
-class ScreenSetupPriceAdmin(BaseSetupPriceAdmin):
-    """Admin configuration for Screen Setup Prices."""
-    pass
-
-# Inline editor for tiered pricing on the Finishing Service page
-class TieredFinishingPriceInline(admin.TabularInline):
-    """Allows editing tiered prices directly within the Finishing Service admin."""
-    model = TieredFinishingPrice
-    fields = ('min_quantity', 'max_quantity', 'price', 'currency')
-    extra = 1  # Show one empty row for adding a new tier
-
-@admin.register(FinishingService)
-class FinishingServiceAdmin(admin.ModelAdmin):
-    """Admin configuration for Finishing Services."""
-    list_display = ('name', 'company', 'pricing_method', 'calculation_method', 'simple_price', 'minimum_charge')
-    list_filter = ('company', 'pricing_method', 'calculation_method')
-    search_fields = ('name', 'company__name')
-    autocomplete_fields = ('company',)
-    inlines = [TieredFinishingPriceInline]
-
-    fieldsets = (
-        (None, {
-            'fields': ('company', 'name')
-        }),
-        ('Pricing Logic', {
-            'description': "Select 'Simple' to use the 'Simple Price' field below. Select 'Tiered' to add price rows in the 'Tiered Prices' section.",
-            'fields': ('pricing_method', 'calculation_method')
-        }),
-        ('Simple Pricing', {
-            'classes': ('collapse',),
-            'fields': ('simple_price', 'minimum_charge', 'currency')
-        }),
-    )
-

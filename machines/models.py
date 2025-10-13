@@ -33,8 +33,7 @@ class Machine(models.Model):
     company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name='machines')
     name = models.CharField(max_length=100, help_text=_("A recognizable name for the machine, e.g., 'HP Indigo' or 'Main Laminator'."))
     machine_type = models.CharField(max_length=50, choices=MachineType.choices, default=MachineType.DIGITAL)
-    supported_sizes = models.ManyToManyField(
-        ProductionPaperSize,
+    supported_sizes = models.ManyToManyField(        ProductionPaperSize,
         related_name="supported_machines",
         blank=True,
         verbose_name=_("Supported standard sizes")

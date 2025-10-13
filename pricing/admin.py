@@ -24,7 +24,7 @@ class BasePriceAdmin(admin.ModelAdmin):
 @admin.register(DigitalPrintPrice)
 class DigitalPrintPriceAdmin(BasePriceAdmin):
     """Admin configuration for Digital Print Prices."""
-    list_display = ('paper_type', 'machine', 'single_side_price', 'double_side_price', 'company')
+    list_display = ('paper_type', 'machine', 'size', 'single_side_price', 'double_side_price', 'company')
     list_filter = ('company', 'machine', 'currency', 'paper_type')
     search_fields = ('company__name', 'machine__name', 'paper_type__name')
     autocomplete_fields = ('company', 'machine', 'paper_type')
@@ -32,7 +32,7 @@ class DigitalPrintPriceAdmin(BasePriceAdmin):
 
     fieldsets = (
         (None, {
-            'fields': ('company', 'machine', 'paper_type')
+            'fields': ('company', 'machine', 'paper_type', 'size')
         }),
         ('Pricing', {
             'fields': (('single_side_price', 'double_side_price'), 'minimum_charge', 'currency')

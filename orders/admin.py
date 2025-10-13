@@ -140,13 +140,13 @@ class JobDeliverableAdmin(admin.ModelAdmin):
 
     readonly_fields = ("total_price", "display_total_price", "display_production_summary")
 
-    autocomplete_fields = ("order", "size", "cover_machine", "cover_material", "inner_machine", "inner_material")
+    autocomplete_fields = ("order", "size", "cover_machine", "cover_material", "machine", "material")
     inlines = [DeliverableFinishingInline]
 
     fieldsets = (
         ("Core Details", {"fields": ("order", "name", "quantity", "size")}),
         ("Calculations", {"fields": ("total_price", "display_total_price", "display_production_summary")}),
-        ("Primary Specifications (for all jobs)", {"fields": ("inner_machine", "inner_material", "sidedness")}),
+        ("Primary Specifications (for all jobs)", {"fields": ("machine", "material", "sidedness")}),
         ("Booklet Specifications", {"classes": ("collapse",), "fields": ("is_booklet", "page_count", "binding")}),
         ("Cover Specifications (Booklets Only)", {"classes": ("collapse",), "fields": ("cover_machine", "cover_material", "cover_sidedness")}),
         ("Imposition Settings (Advanced)", {"classes": ("collapse",), "fields": ("bleed_mm", "gutter_mm", "gripper_mm")}),
@@ -192,12 +192,12 @@ class JobDeliverableAdmin(admin.ModelAdmin):
         """
         try:
             # 1) ensure imposition / sheet counts are available on the object
-            inner_sheets = 0
+            sheets = 0
             cover_sheets = 0
             try:
-                inner_sheets = int(obj._inner_sheets_needed() or 0)
+                sheets = int(obj._sheets_needed() or 0)
             except Exception:
-                inner_sheets = 0
+                sheets = 0
             try:
                 cover_sheets = int(obj._cover_sheets_needed() or 0)
             except Exception:
@@ -205,7 +205,7 @@ class JobDeliverableAdmin(admin.ModelAdmin):
 
             # Attach a minimal imposition dict the cost service will pick up
             obj.imposition = {
-                "inner_sheets": inner_sheets,
+                "sheets": sheets,
                 "cover_sheets": cover_sheets,
                 # For non-booklet jobs you can also include items_per_sheet if available:
                 # "items_per_sheet": some_value
