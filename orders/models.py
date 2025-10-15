@@ -97,65 +97,30 @@ class JobDeliverable(models.Model):
 
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="deliverables")
     name = models.CharField(max_length=120, help_text=_("e.g., 'Book – Title XYZ'"))
+    slug = models.SlugField(_("slug"), max_length=255, blank=True, unique=True, db_index=True)
     quantity = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
     size = models.ForeignKey(FinalPaperSize, on_delete=models.PROTECT, related_name="deliverables")
-
-    machine = models.ForeignKey(
-        Machine,
-        on_delete=models.PROTECT,
-        related_name="deliverables",
-        limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},
-    )
-    material = models.ForeignKey(
-        PaperType,
-        on_delete=models.PROTECT,
-        related_name="deliverables",
-        help_text=_("The paper stock this pricing applies to."),
-    )
+    machine = models.ForeignKey(Machine, on_delete=models.PROTECT, related_name="deliverables", limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},)
+    material = models.ForeignKey(PaperType, on_delete=models.PROTECT, related_name="deliverables", help_text=_("The paper stock this pricing applies to."),)
 
     sidedness = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.DOUBLE)
     total_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
-    is_booklet = models.BooleanField(default=False)
+    is_booklet = models.BooleanField(default=False) 
     page_count = models.PositiveIntegerField(default=1, help_text=_("Total pages including cover if booklet"))
 
-    cover_machine = models.ForeignKey(
-        Machine,
-        null=True,
-        blank=True,
-        on_delete=models.PROTECT,
-        related_name="cover_deliverables",
-        limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},
-    )
-    cover_material = models.ForeignKey(
-        PaperType,
-        null=True,
-        blank=True,
-        on_delete=models.PROTECT,
-        related_name="cover_deliverables",
-    )
+    cover_machine = models.ForeignKey( Machine, null=True, blank=True, on_delete=models.PROTECT, related_name="cover_deliverables", limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},)
+    cover_material = models.ForeignKey( PaperType, null=True, blank=True, on_delete=models.PROTECT, related_name="cover_deliverables",)
     cover_sidedness = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.SINGLE)
-
     binding = models.CharField(max_length=12, choices=BindingType.choices, default=BindingType.NONE)
-    finishings = models.ManyToManyField(
-        "pricing.FinishingService",
-        through="orders.DeliverableFinishing",
-        blank=True,
-        related_name="deliverables",
-    )
-    source_template = models.ForeignKey(
-        "products.ProductTemplate",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="deliverables",
-        help_text=_("The product template this deliverable is based on, if any."),
-    )
+    finishings = models.ManyToManyField("pricing.FinishingService", through="orders.DeliverableFinishing", blank=True, related_name="deliverables",)
+    source_template = models.ForeignKey("products.ProductTemplate", on_delete=models.SET_NULL, null=True, blank=True, related_name="deliverables", help_text=_("The product template this deliverable is based on, if any."),)
 
     bleed_mm = models.PositiveIntegerField(default=3)
     gutter_mm = models.PositiveIntegerField(default=2)
     gripper_mm = models.PositiveIntegerField(default=3)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-created_at"]

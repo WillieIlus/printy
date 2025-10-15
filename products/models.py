@@ -16,6 +16,19 @@ from engine.services.products import product_starting_price, get_product_price_r
 
 import math
 
+# -------------------------------------------------------------------
+# ENUMS
+# -------------------------------------------------------------------
+class BindingType(models.TextChoices):
+    NONE = "NONE", _("None")
+    SADDLE = "SADDLE", _("Saddle Stitch")
+    PERFECT = "PERFECT", _("Perfect Bind")
+
+
+class Sidedness(models.TextChoices):
+    SINGLE = "S1", _("Single-sided")
+    DOUBLE = "S2", _("Double-sided")
+
 
 class ProductImage(models.Model):
     """
@@ -52,41 +65,44 @@ class ProductTemplate(models.Model):
     Contains constraints, available options, and visual presentation.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    company = models.ForeignKey(
-        PrintCompany,
-        on_delete=models.CASCADE,
-        related_name="products",
-        verbose_name=_("company"),
-    )
-    category = models.ForeignKey(
-        ServiceCategory,
-        on_delete=models.PROTECT,
-        related_name="products",
-        verbose_name=_("category"),
-    )
+    company = models.ForeignKey( PrintCompany, on_delete=models.CASCADE, related_name="products", verbose_name=_("company"),)
+    category = models.ForeignKey( ServiceCategory, on_delete=models.PROTECT, related_name="products", verbose_name=_("category"),)
     name = models.CharField(_("name"), max_length=255)  # e.g. "A4 Booklet"
     slug = models.SlugField(_("slug"), max_length=255, blank=True, unique=True, db_index=True)
     description = models.TextField(_("description"), blank=True)
-
+    minimum_order_quantity = models.PositiveIntegerField(default=100, verbose_name=_("minimum order quantity"))
     size = models.ForeignKey(FinalPaperSize, on_delete=models.CASCADE, verbose_name=_("size"))  # Fixed typo
     deliverable = models.CharField(_("deliverable"), max_length=50)  # e.g. "Booklet", "Flyer"
-
+    machine = models.ForeignKey(Machine, on_delete=models.PROTECT, related_name="deliverables", limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},)
+    
     # Paper ranges
-    cover_range_gsm = models.ManyToManyField(PaperType, related_name="cover_templates")
-    insert_range_gsm = models.ManyToManyField(PaperType, related_name="insert_templates")
+    cover_range_material = models.ManyToManyField(PaperType, related_name="cover_templates")
+    range_material = models.ManyToManyField(PaperType, related_name="templates")
 
-    # Rules
+    sidedness = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.DOUBLE)
+    minimum_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    is_booklet = models.BooleanField(default=False)
+    page_count = models.PositiveIntegerField(default=1, help_text=_("Total pages including cover if booklet"))
+
+    cover_machine = models.ForeignKey( Machine, null=True, blank=True, on_delete=models.PROTECT, related_name="cover_deliverables", limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},)
+    cover_material = models.ForeignKey( PaperType, null=True, blank=True, on_delete=models.PROTECT, related_name="cover_deliverables",)
+    cover_sidedness = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.SINGLE)
+    binding = models.CharField(max_length=12, choices=BindingType.choices, default=BindingType.NONE)
+    
     page_step = models.PositiveIntegerField(default=2, help_text=_("Enforce even pages (e.g., 4 pages for booklets)."))
 
     # Mandatory & optional finishes
     mandatory_finishings = models.ManyToManyField(Machine, related_name="mandatory_templates", blank=True)
     optional_finishings = models.ManyToManyField(Machine, related_name="optional_templates", blank=True)
 
-    minimum_order_quantity = models.PositiveIntegerField(default=100, verbose_name=_("minimum order quantity"))
     is_active = models.BooleanField(default=True, verbose_name=_("is active"))
     is_popular = models.BooleanField(default=False)
     is_featured = models.BooleanField(default=False, verbose_name=_("is featured"))
 
+    bleed_mm = models.PositiveIntegerField(default=3)
+    gutter_mm = models.PositiveIntegerField(default=2)
+    gripper_mm = models.PositiveIntegerField(default=3)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
