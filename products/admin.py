@@ -36,12 +36,12 @@ class ProductTemplateAdmin(admin.ModelAdmin):
     search_fields = ("name", "description", "slug")
     prepopulated_fields = {"slug": ("name",)}
     readonly_fields = ("created_at", "updated_at", "starting_price")
-    filter_horizontal = (
-        "cover_range_gsm",
-        "insert_range_gsm",
-        "mandatory_finishings",
-        "optional_finishings",
-    )
+    # filter_horizontal = (
+    #     "cover_range_gsm",
+    #     "insert_range_gsm",
+    #     "mandatory_finishings",
+    #     "optional_finishings",
+    # )
     inlines = [ProductImageInline]
 
 

@@ -4,7 +4,7 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 from core.models import PrintCompany
 from papers.models import PaperType, ProductionPaperSize
-from machines.models import Machine, MachineType
+from machines.models import FinishingService, Machine, MachineType
 
 
 class DigitalPrintPrice(models.Model):
@@ -158,37 +158,6 @@ class UVDTFPrintPrice(models.Model):
 
     def __str__(self):
         return f"{self.machine.name} - {self.material.name}: {self.price_per_sq_meter}{self.currency}/sqm"
-
-class FinishingService(models.Model):
-    """
-    Post-print finishing service (simple or tiered pricing).
-    """
-    class CalculationMethod(models.TextChoices):
-        PER_SHEET_SINGLE_SIDED = "PER_SHEET_SINGLE", _("Per Sheet (Single Side)")
-        PER_SHEET_DOUBLE_SIDED = "PER_SHEET_DOUBLE", _("Per Sheet (Double Side)")
-        PER_ITEM = "PER_ITEM", _("Per Final Item")
-        PER_SQ_METER = "PER_SQ_METER", _("Per Square Meter")
-
-    class PricingMethod(models.TextChoices):
-        SIMPLE = "SIMPLE", _("Simple Price")
-        TIERED = "TIERED", _("Tiered by Quantity")
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name="finishing_services")
-    name = models.CharField(max_length=100)
-
-    pricing_method = models.CharField(max_length=10, choices=PricingMethod.choices, default=PricingMethod.SIMPLE)
-    calculation_method = models.CharField(max_length=20, choices=CalculationMethod.choices)
-
-    simple_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    currency = models.CharField(max_length=10, default="KES")
-    minimum_charge = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-
-    class Meta:
-        unique_together = ("company", "name")
-
-    def __str__(self):
-        return self.name
 
 
 class TieredFinishingPrice(models.Model):
