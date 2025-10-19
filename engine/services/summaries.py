@@ -4,8 +4,10 @@ Production summary + short cost snippet using the direct-price cost service.
 
 from typing import Optional
 from decimal import Decimal
-from engine.services.impositions import items_per_sheet
+from engine.services.impositions import items_per_sheet, get_job_sheets_needed
 from engine.services.costs import compute_total_cost
+from engine.services.finishing_costs import compute_finishing_cost
+from machines.models import FinishingService
 
 
 # -------------------------------------------------------------------
@@ -78,43 +80,30 @@ def _resolve_sheet_for_deliverable(deliverable):
 # -------------------------------------------------------------------
 # MAIN SUMMARY
 # -------------------------------------------------------------------
+
 def deliverable_summary(deliverable) -> str:
     """
-    Human-readable production summary and cost snippet.
-    Example:
-      "Business Cards: 12 pcs fit per SRA3 ... Estimated cost: KES 2,000.00."
+    Human-readable production summary and cost snippet for a job deliverable.
+    Combines print cost + finishing cost to get the grand total.
     """
 
     name = getattr(deliverable, "name", "Deliverable")
     qty = getattr(deliverable, "quantity", 0)
-
-    # --- final size
     final_size = getattr(deliverable, "size", None)
     final_w = getattr(final_size, "width_mm", None) if final_size else None
     final_h = getattr(final_size, "height_mm", None) if final_size else None
 
-    # --- print params
     bleed = getattr(deliverable, "bleed_mm", 3)
     gutter = getattr(deliverable, "gutter_mm", 5)
-    gripper = getattr(deliverable, "gripper_mm", 10)
 
-    # --- resolve production sheet
+    # 🧾 Resolve production sheet
+    from engine.services.costs import _resolve_sheet_for_deliverable
     sheet, source = _resolve_sheet_for_deliverable(deliverable)
     if sheet is None:
-        return f"{name}: Could not resolve a production sheet size (no price.size, SRA3, machine or material size). Quantity: {qty}."
+        return f"{name}: Could not resolve a production sheet size. Quantity: {qty}."
 
-    # --- Booklet handling
-    if bool(getattr(deliverable, "is_booklet", False)):
-        pages = int(getattr(deliverable, "page_count", 0) or 0)
-        base_msg = f"📚 {name}: {pages}pp booklet (saddle/perfect)."
-        try:
-            cost = compute_total_cost(deliverable)
-            return base_msg + f" Estimated cost: {cost.get('total_cost_formatted', 'KES 0.00')}."
-        except Exception as e:
-            return base_msg + f" (cost unavailable: {e})"
-
-    # --- Flat job imposition
-    items = items_per_sheet(
+    # 🧮 Imposition calculation
+    per_sheet = items_per_sheet(
         sheet_w_mm=getattr(sheet, "width_mm", 0),
         sheet_h_mm=getattr(sheet, "height_mm", 0),
         item_w_mm=final_w or 0,
@@ -123,11 +112,8 @@ def deliverable_summary(deliverable) -> str:
         gutter_mm=gutter,
     )
 
-    if not items or int(items) <= 0:
-        return f"{name}: Item ({final_w}×{final_h} mm) does NOT fit on {sheet.name} ({sheet.width_mm}×{sheet.height_mm} mm) even after bleed."
-
     import math
-    sheets = math.ceil(qty / int(items))
+    sheets = math.ceil(qty / int(per_sheet)) if per_sheet else 0
 
     machine = getattr(deliverable, "machine", None)
     paper = getattr(deliverable, "material", None)
@@ -137,7 +123,7 @@ def deliverable_summary(deliverable) -> str:
     sheet_name = getattr(sheet, "name", "Unknown")
 
     base_msg = (
-        f"📄 {name}: {int(items)} pcs fit per {sheet_name} "
+        f"📄 {name}: {int(per_sheet)} pcs fit per {sheet_name} "
         f"({sheet.width_mm}×{sheet.height_mm} mm)\n"
         f"🧮 For {qty} pcs → {sheets} sheet(s). (sheet source: {source})\n"
         f"🖨 Machine: {machine_name}\n"
@@ -145,13 +131,49 @@ def deliverable_summary(deliverable) -> str:
         f"↔️ Sidedness: {sidedness}\n"
     )
 
-    # --- Compute total cost
-    try:
-        cost = compute_total_cost(deliverable)
-        total_cost_fmt = cost.get("total_cost_formatted", "KES 0.00")
-        details = cost.get("details", "")
-        base_msg += f"💰 Estimated cost: {total_cost_fmt}\n{details}\n"
-    except Exception as e:
-        base_msg += f"⚠️ Cost computation failed: {e}\n"
+    # 🖨 Print cost
+    print_cost_data = compute_total_cost(deliverable)
+    print_cost = print_cost_data.get("total_cost", Decimal("0.00"))
+    print_cost_fmt = print_cost_data.get("total_cost_formatted", "KES 0.00")
+    base_msg += f"🧾 Print Cost: {print_cost_fmt}\n"
+
+    # 🪄 Finishing cost calculation
+    finishing_total = Decimal("0.00")
+    finishing_lines = ""
+
+    # Using through table if available
+    if hasattr(deliverable, "deliverablefinishing_set"):
+        finishing_links = deliverable.deliverablefinishing_set.all()
+    else:
+        finishing_links = deliverable.finishings.all()
+
+    for link in finishing_links:
+        # If through model
+        if hasattr(link, "finishing"):
+            # service = link.finishing
+            service = link.service 
+            qty_used = getattr(link, "quantity", None)
+        else:
+            service = link
+            qty_used = None
+
+        # determine quantity
+        if qty_used and qty_used > 0:
+            calc_qty = qty_used
+        elif service.calculation_method == FinishingService.CalculationMethod.PER_SHEET_SINGLE_SIDED:
+            calc_qty = get_job_sheets_needed(deliverable)
+        else:
+            calc_qty = qty
+
+        fc = compute_finishing_cost(service, calc_qty)
+        finishing_total += fc["total"]
+        finishing_lines += f"✨ {service.name}: {calc_qty} × {fc['unit_price']} = {fc['formatted']}\n"
+
+    if finishing_lines:
+        base_msg += finishing_lines
+
+    # 💰 Grand total
+    grand_total = print_cost + finishing_total
+    base_msg += f"💵 Grand Total: KES {grand_total:,.2f}\n"
 
     return base_msg.strip()

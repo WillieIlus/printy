@@ -161,11 +161,9 @@ class UVDTFPrintPrice(models.Model):
 
 
 class TieredFinishingPrice(models.Model):
-    """
-    Quantity-based price tiers for finishing services.
-    """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     service = models.ForeignKey(FinishingService, on_delete=models.CASCADE, related_name="tiered_prices")
+    machine = models.ForeignKey("machines.Machine", on_delete=models.CASCADE, related_name="finishing_prices")
     min_quantity = models.PositiveIntegerField()
     max_quantity = models.PositiveIntegerField()
     price = models.DecimalField(max_digits=10, decimal_places=2)
@@ -173,6 +171,12 @@ class TieredFinishingPrice(models.Model):
 
     class Meta:
         ordering = ["min_quantity"]
+        unique_together = ("service", "machine", "min_quantity", "max_quantity")
 
     def __str__(self):
-        return f"{self.service.name}: {self.min_quantity}-{self.max_quantity} @ {self.price}{self.currency}"
+        return f"{self.service.name} @ {self.machine.name}: {self.min_quantity}-{self.max_quantity} @ {self.price}{self.currency}"
+
+    
+
+    
+

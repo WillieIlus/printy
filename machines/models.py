@@ -33,15 +33,9 @@ class Machine(models.Model):
     company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name='machine_finishing_services')
     name = models.CharField(max_length=100, help_text=_("A recognizable name for the machine, e.g., 'HP Indigo' or 'Main Laminator'."))
     machine_type = models.CharField(max_length=50, choices=MachineType.choices, default=MachineType.DIGITAL)
-    supported_sizes = models.ManyToManyField(        ProductionPaperSize,
-        related_name="supported_machines",
-        blank=True,
-        verbose_name=_("Supported standard sizes")
-    )
-    supports_client_custom_size = models.BooleanField(
-        default=False,
-        verbose_name=_("Supports custom sizes")
-    )
+    supported_sizes = models.ManyToManyField(ProductionPaperSize, related_name="supported_machines", blank=True, verbose_name=_("Supported standard sizes"))
+    default_sheet = models.ForeignKey(ProductionPaperSize, null=True, blank=True, on_delete=models.SET_NULL, related_name='default_sheet_for_machines')
+    supports_client_custom_size = models.BooleanField(default=False, verbose_name=_("Supports custom sizes"))
 
     class Meta:
         unique_together = ('company', 'name')
@@ -52,59 +46,24 @@ class Machine(models.Model):
         return f"{self.name} ({self.get_machine_type_display()})"
 
 
-
 class FinishingService(models.Model):
-    """
-    A generic model for post-print services that supports both
-    simple (single price) and tiered (quantity-based) pricing.
-    """
     class CalculationMethod(models.TextChoices):
-        PER_SHEET_SINGLE_SIDED = 'PER_SHEET_SINGLE', _('Per Sheet (Single Side)')
-        PER_SHEET_DOUBLE_sided = 'PER_SHEET_DOUBLE', _('Per Sheet (Double Sided)')
-        PER_ITEM = 'PER_ITEM', _('Per Final Item')
-        PER_SQ_METER = 'PER_SQ_METER', _('Per Square Meter')
+        PER_JOB = "PER_JOB", "Flat rate per job"
+        PER_SET = "PER_SET", "Per set (e.g., per book, per bundle)"
+        PER_COPY = "PER_COPY", "Per printed copy"
+        PER_SHEET = "PER_SHEET", "Per sheet"
+        PER_SHEET_PER_SIDE = "PER_SHEET_PER_SIDE", "Per sheet per side"
 
-    class PricingMethod(models.TextChoices):
-        SIMPLE = 'SIMPLE', _('Simple Price')
-        TIERED = 'TIERED', _('Tiered by Quantity')
-
-    # --- Core Fields ---
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name='finishing_services')
-    name = models.CharField(max_length=100, help_text=_("Name of the service, e.g., 'Matt Lamination', 'Saddle-Stitch Binding'."))
-    
-    # --- Pricing Logic Fields ---
-    pricing_method = models.CharField(
-        max_length=10,
-        choices=PricingMethod.choices,
-        default=PricingMethod.SIMPLE,
-        help_text=_("Choose 'Simple' for a single price or 'Tiered' for quantity-based price brackets.")
-    )
+    name = models.CharField(max_length=100)
+    code = models.SlugField(unique=True)
     calculation_method = models.CharField(
-        max_length=20,
+        max_length=32,
         choices=CalculationMethod.choices,
-        help_text=_("How the price is applied (e.g., per sheet, per item).")
+        default=CalculationMethod.PER_JOB
     )
-    simple_price = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        null=True,
-        blank=True,
-        help_text=_("The price for this service if using the 'Simple' pricing method.")
-    )
-    currency = models.CharField(max_length=10, default="KES")
-    minimum_charge = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        default=0,
-        help_text=_("The minimum total price for this service on a job.")
-    )
-
-    class Meta:
-        unique_together = ('company', 'name')
-        verbose_name = _("Finishing Service")
-        verbose_name_plural = _("Finishing Services")
+    description = models.TextField(blank=True)
+    is_optional = models.BooleanField(default=True)
 
     def __str__(self):
         return self.name
-    

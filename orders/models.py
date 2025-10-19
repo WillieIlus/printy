@@ -90,30 +90,37 @@ class Sidedness(models.TextChoices):
 # JOB DELIVERABLE
 # -------------------------------------------------------------------
 class JobDeliverable(models.Model):
-    """
-    One deliverable within an order (e.g., booklet, business cards, flyer).
-    Stores client choices and calculates its own price upon saving.
-    """
+    class AppliesTo(models.TextChoices):
+        COVER = "cover", _("Cover only")
+        INNER = "inner", _("Inner pages only")
+        WHOLE = "whole", _("Entire product")
 
+    applies_to = models.CharField(
+        max_length=8,
+        choices=AppliesTo.choices,
+        default=AppliesTo.WHOLE
+    )
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="deliverables")
     name = models.CharField(max_length=120, help_text=_("e.g., 'Book – Title XYZ'"))
     slug = models.SlugField(_("slug"), max_length=255, blank=True, unique=True, db_index=True)
     quantity = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
     size = models.ForeignKey(FinalPaperSize, on_delete=models.PROTECT, related_name="deliverables")
+    
     machine = models.ForeignKey(Machine, on_delete=models.PROTECT, related_name="job_deliverables", limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},)
     material = models.ForeignKey(PaperType, on_delete=models.PROTECT, related_name="deliverables", help_text=_("The paper stock this pricing applies to."),)
-
-    sidedness = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.DOUBLE)
-    total_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-
-    is_booklet = models.BooleanField(default=False) 
-    page_count = models.PositiveIntegerField(default=1, help_text=_("Total pages including cover if booklet"))
-
+    sides = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.DOUBLE)
+    is_booklet = models.BooleanField(default=False)
     cover_machine = models.ForeignKey( Machine, null=True, blank=True, on_delete=models.PROTECT, related_name="cover_job_deliverables", limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},)
     cover_material = models.ForeignKey( PaperType, null=True, blank=True, on_delete=models.PROTECT, related_name="cover_job_deliverables",)
-    cover_sidedness = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.SINGLE)
+    cover_sides = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.SINGLE)
+    page_count = models.PositiveIntegerField(default=1, help_text=_("Total pages including cover if booklet"))
+    sets = models.PositiveIntegerField(default=1)   # useful for per-set finishing like cutting
+
     binding = models.CharField(max_length=12, choices=BindingType.choices, default=BindingType.NONE)
     finishings = models.ManyToManyField(FinishingService, through="orders.DeliverableFinishing", blank=True, related_name="deliverables" )
+    
+    sheets_needed = models.PositiveIntegerField(default=0) #useful to determine number of sheet needed after getting the total items required
+    total_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     source_template = models.ForeignKey("products.ProductTemplate", on_delete=models.SET_NULL, null=True, blank=True, related_name="deliverables", help_text=_("The product template this deliverable is based on, if any."),)
 
     bleed_mm = models.PositiveIntegerField(default=3)
@@ -121,6 +128,7 @@ class JobDeliverable(models.Model):
     gripper_mm = models.PositiveIntegerField(default=3)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    notes = models.CharField(max_length=255, blank=True)
 
     class Meta:
         ordering = ["-created_at"]
@@ -170,75 +178,17 @@ class JobDeliverable(models.Model):
 # DELIVERABLE FINISHINGS
 # -------------------------------------------------------------------
 
+# orders/models.py (new)
 class DeliverableFinishing(models.Model):
-    class AppliesTo(models.TextChoices):
-        COVER = "cover", _("Cover only")
-        INNER = "inner", _("Inner pages only")
-        WHOLE = "whole", _("Entire product")
-
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    deliverable = models.ForeignKey(
-        "orders.JobDeliverable",
-        on_delete=models.CASCADE,
-        related_name="deliverable_finishings"
-    )
-    service = models.ForeignKey(
-        FinishingService,
-        on_delete=models.PROTECT,
-        related_name="applied_to"
-    )
-
-    # Finishing specifics
-    applies_to = models.CharField(
-        max_length=8,
-        choices=AppliesTo.choices,
-        default=AppliesTo.WHOLE
-    )
-    sides = models.PositiveIntegerField(default=1)  # 1 or 2 sides
-    sets = models.PositiveIntegerField(default=1)   # useful for per-set finishing like cutting
-    quantity_override = models.PositiveIntegerField(null=True, blank=True)  # optional custom qty
-
-    # Price tracking (optional but powerful)
-    unit_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    total_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-
+    deliverable = models.ForeignKey("orders.JobDeliverable", on_delete=models.CASCADE, related_name="deliverable_finishings")
+    service = models.ForeignKey("machines.FinishingService", on_delete=models.CASCADE, related_name="deliverable_links")
+    applies_to = models.CharField(max_length=8, choices=JobDeliverable.AppliesTo.choices, default=JobDeliverable.AppliesTo.WHOLE)
+    quantity = models.PositiveIntegerField(null=True, blank=True,
+                                           help_text="Optional override quantity for the finishing calculation.")
+    unit_price_override = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     notes = models.CharField(max_length=255, blank=True)
 
     class Meta:
-        verbose_name = _("deliverable finishing")
-        verbose_name_plural = _("deliverable finishings")
-        constraints = [
-            models.UniqueConstraint(
-                fields=["deliverable", "service", "applies_to"],
-                name="unique_deliverable_finishing_scope"
-            )
-        ]
+        unique_together = ("deliverable", "service", "applies_to")
 
-    def __str__(self):
-        return f"{self.deliverable.name} – {self.service.name} ({self.applies_to})"
-
-    def calculate_price(self):
-        """
-        Centralized pricing logic for each finishing line.
-        """
-        qty = self.quantity_override or self.deliverable.quantity
-        method = self.service.calculation_method
-
-        if method == "PER_SHEET_SINGLE":
-            self.total_price = self.service.simple_price * qty
-        elif method == "PER_SHEET_DOUBLE":
-            self.total_price = self.service.simple_price * qty * self.sides
-        elif method == "PER_ITEM":
-            self.total_price = self.service.simple_price * qty
-        elif method == "PER_SQ_METER":
-            # You can pull area from deliverable size here
-            area = self.deliverable.size.area_m2()
-            self.total_price = self.service.simple_price * qty * area
-        else:
-            self.total_price = 0
-
-        return self.total_price
-
-    def save(self, *args, **kwargs):
-        self.calculate_price()
-        super().save(*args, **kwargs)
