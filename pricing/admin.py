@@ -1,4 +1,3 @@
-#pricing/admin.py
 from django.contrib import admin
 from .models import (
     DigitalPrintPrice,
@@ -11,86 +10,126 @@ from .models import (
     TieredFinishingPrice,
 )
 
-# A base admin class for shared price model configurations
-class BasePriceAdmin(admin.ModelAdmin):
-    """Base admin configuration for common price models."""
-    list_display = ('company', 'machine', 'minimum_charge', 'currency')
-    list_filter = ('company', 'machine', 'currency')
-    search_fields = ('company__name', 'machine__name')
-    autocomplete_fields = ('company', 'machine')
-    ordering = ('company',)
 
+# -------------------------------------------------------------------
+# BASE ADMIN CLASS
+# -------------------------------------------------------------------
+class BasePricingAdmin(admin.ModelAdmin):
+    """
+    Base admin for pricing models.
+    Provides common fields like `id` as readonly and ordering by company.
+    """
+    readonly_fields = ("id",)
+    ordering = ("company",)
+    list_per_page = 25
+    search_help_text = "Search by machine, company or material name"
+
+
+# -------------------------------------------------------------------
+# DIGITAL PRINT PRICE ADMIN
+# -------------------------------------------------------------------
 @admin.register(DigitalPrintPrice)
-class DigitalPrintPriceAdmin(BasePriceAdmin):
-    """Admin configuration for Digital Print Prices."""
-    list_display = ('paper_type', 'machine', 'size', 'single_side_price', 'double_side_price', 'company')
-    list_filter = ('company', 'machine', 'currency', 'paper_type')
-    search_fields = ('company__name', 'machine__name', 'paper_type__name')
-    autocomplete_fields = ('company', 'machine', 'paper_type')
-    ordering = ('paper_type__name',)
-
-    fieldsets = (
-        (None, {
-            'fields': ('company', 'machine', 'paper_type', 'size')
-        }),
-        ('Pricing', {
-            'fields': (('single_side_price', 'double_side_price'), 'minimum_charge', 'currency')
-        }),
+class DigitalPrintPriceAdmin(BasePricingAdmin):
+    list_display = (
+        "machine",
+        "paper_type",
+        "single_side_price",
+        "double_side_price",
+        "currency",
+        "company",
     )
+    list_filter = ("company", "machine")
+    search_fields = ("machine__name", "company__name", "paper_type__name")
+    autocomplete_fields = ("company", "machine", "paper_type")
 
+
+# -------------------------------------------------------------------
+# LARGE FORMAT PRINT PRICE ADMIN
+# -------------------------------------------------------------------
 @admin.register(LargeFormatPrintPrice)
-class LargeFormatPrintPriceAdmin(BasePriceAdmin):
-    """Admin configuration for Large Format Print Prices."""
-    list_display = ('material', 'machine', 'price_per_sq_meter', 'roll_width_m', 'company')
-    list_filter = ('company', 'machine', 'currency', 'material')
-    search_fields = ('company__name', 'machine__name', 'material__name')
-    autocomplete_fields = ('company', 'machine', 'material')
-    ordering = ('material__name',)
+class LargeFormatPrintPriceAdmin(BasePricingAdmin):
+    list_display = (
+        "machine",
+        "material",
+        "roll_width_m",
+        "price_per_sq_meter",
+        "currency",
+        "company",
+    )
+    list_filter = ("company", "machine", "material")
+    search_fields = ("machine__name", "company__name", "material__name")
+    autocomplete_fields = ("company", "machine", "material")
 
-@admin.register(OffsetRunPrice)
-class OffsetRunPriceAdmin(BasePriceAdmin):
-    """Admin configuration for Offset Run Prices."""
-    list_display = ('paper_type', 'machine', 'price_per_sheet_per_color', 'company')
-    list_filter = ('company', 'machine', 'currency', 'paper_type')
-    search_fields = ('company__name', 'machine__name', 'paper_type__name')
-    autocomplete_fields = ('company', 'machine', 'paper_type')
-    ordering = ('paper_type__name',)
 
-@admin.register(ScreenRunPrice)
-class ScreenRunPriceAdmin(BasePriceAdmin):
-    """Admin configuration for Screen Run Prices."""
-    list_display = ('machine', 'run_cost_per_item_per_color', 'company')
-
-@admin.register(UVDTFPrintPrice)
-class UVDTFPrintPriceAdmin(BasePriceAdmin):
-    """Admin configuration for UV DTF Print Prices."""
-    list_display = ('material', 'machine', 'price_per_sq_meter', 'company')
-    list_filter = ('company', 'machine', 'currency', 'material')
-    search_fields = ('company__name', 'machine__name', 'material__name')
-    autocomplete_fields = ('company', 'machine', 'material')
-
-# Admin configurations for one-time setup costs
-class BaseSetupPriceAdmin(admin.ModelAdmin):
-    """Base admin for one-time setup costs."""
-    list_display = ('name', 'setup_cost', 'company')
-    list_filter = ('company',)
-    search_fields = ('name', 'company__name')
-    autocomplete_fields = ('company',)
-    ordering = ('name',)
-
+# -------------------------------------------------------------------
+# OFFSET PLATE PRICE ADMIN
+# -------------------------------------------------------------------
 @admin.register(OffsetPlatePrice)
-class OffsetPlatePriceAdmin(BaseSetupPriceAdmin):
-    """Admin configuration for Offset Plate Prices."""
-    pass
+class OffsetPlatePriceAdmin(BasePricingAdmin):
+    list_display = ("name", "setup_cost", "company")
+    list_filter = ("company",)
+    search_fields = ("name", "company__name")
+    autocomplete_fields = ("company",)
 
+
+# -------------------------------------------------------------------
+# OFFSET RUN PRICE ADMIN
+# -------------------------------------------------------------------
+@admin.register(OffsetRunPrice)
+class OffsetRunPriceAdmin(BasePricingAdmin):
+    list_display = (
+        "machine",
+        "paper_type",
+        "price_per_sheet_per_color",
+        "currency",
+        "company",
+    )
+    list_filter = ("company", "machine")
+    search_fields = ("machine__name", "paper_type__name", "company__name")
+    autocomplete_fields = ("company", "machine", "paper_type")
+
+
+# -------------------------------------------------------------------
+# SCREEN SETUP PRICE ADMIN
+# -------------------------------------------------------------------
 @admin.register(ScreenSetupPrice)
-class ScreenSetupPriceAdmin(BaseSetupPriceAdmin):
-    """Admin configuration for Screen Setup Prices."""
-    pass
+class ScreenSetupPriceAdmin(BasePricingAdmin):
+    list_display = ("name", "setup_cost", "company")
+    list_filter = ("company",)
+    search_fields = ("name", "company__name")
+    autocomplete_fields = ("company",)
 
-# Inline editor for tiered pricing on the Finishing Service page
-class TieredFinishingPriceInline(admin.TabularInline):
-    """Allows editing tiered prices directly within the Finishing Service admin."""
-    model = TieredFinishingPrice
-    fields = ('min_quantity', 'max_quantity', 'price', 'currency')
-    extra = 1  # Show one empty row for adding a new tier
+
+# -------------------------------------------------------------------
+# SCREEN RUN PRICE ADMIN
+# -------------------------------------------------------------------
+@admin.register(ScreenRunPrice)
+class ScreenRunPriceAdmin(BasePricingAdmin):
+    list_display = ("machine", "run_cost_per_item_per_color", "currency", "company")
+    list_filter = ("company", "machine")
+    search_fields = ("machine__name", "company__name")
+    autocomplete_fields = ("company", "machine")
+
+
+# -------------------------------------------------------------------
+# UV DTF PRINT PRICE ADMIN
+# -------------------------------------------------------------------
+@admin.register(UVDTFPrintPrice)
+class UVDTFPrintPriceAdmin(BasePricingAdmin):
+    list_display = ("machine", "material", "price_per_sq_meter", "currency", "company")
+    list_filter = ("company", "machine", "material")
+    search_fields = ("machine__name", "company__name", "material__name")
+    autocomplete_fields = ("company", "machine", "material")
+
+
+# -------------------------------------------------------------------
+# TIERED FINISHING PRICE ADMIN
+# -------------------------------------------------------------------
+@admin.register(TieredFinishingPrice)
+class TieredFinishingPriceAdmin(admin.ModelAdmin):
+    readonly_fields = ("id",)
+    list_display = ("machine", "min_quantity", "max_quantity", "price", "currency")
+    list_filter = ("machine",)
+    search_fields = ("machine__name",)
+    autocomplete_fields = ("machine",)
+    ordering = ("machine", "min_quantity")

@@ -3,41 +3,41 @@ from django.contrib import admin
 from .models import Order, JobDeliverable, DeliverableFinishing
 
 
-# ---------------------------------
-# UTILS
-# ---------------------------------
+# -------------------------------------------------------------------
+# HELPER — Currency Formatter
+# -------------------------------------------------------------------
 def _format_currency(amount: Decimal, currency: str = "KES") -> str:
+    """
+    Formats a Decimal amount as currency (e.g., KES 1,234.00).
+    """
     try:
-        a = (Decimal(amount or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        return f"{currency} {a:,}"
+        value = (Decimal(amount or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return f"{currency} {value:,}"
     except Exception:
         return f"{currency} 0.00"
 
 
-# ---------------------------------
+# -------------------------------------------------------------------
 # INLINE — Finishing per Deliverable
-# ---------------------------------
+# -------------------------------------------------------------------
 class DeliverableFinishingInline(admin.StackedInline):
     model = DeliverableFinishing
     autocomplete_fields = ("service",)
-    autocomplete_fields = ("service",) 
-   # ✅ uses FinishingService
+    raw_id_fields = ("deliverable",)
     extra = 1
+
     fields = (
         "deliverable",
+        "service",
         "applies_to",
-        "sides",
-        "sets",
-        "quantity_override",
-        "unit_price",
-        "total_price",
+        "quantity",
+        "unit_price_override",
         "notes",
     )
-    readonly_fields = ("total_price",)
 
     def save_model(self, request, obj, form, change):
         """
-        Ensure finishing price is recalculated whenever saved.
+        Recalculate finishing cost on save (if applicable).
         """
         try:
             obj.calculate_price()
@@ -46,9 +46,9 @@ class DeliverableFinishingInline(admin.StackedInline):
         super().save_model(request, obj, form, change)
 
 
-# ---------------------------------
+# -------------------------------------------------------------------
 # INLINE — Deliverables inside Order
-# ---------------------------------
+# -------------------------------------------------------------------
 class JobDeliverableInline(admin.TabularInline):
     model = JobDeliverable
     fields = ("name", "quantity", "size", "display_production_summary", "display_total_price")
@@ -61,24 +61,32 @@ class JobDeliverableInline(admin.TabularInline):
 
     @admin.display(description="Production Summary")
     def display_production_summary(self, obj):
+        from engine.services.summaries import deliverable_summary
         try:
-            from engine.services.summaries import deliverable_summary
             return deliverable_summary(obj)
         except Exception:
             return "-"
 
     @admin.display(description="Total Price")
     def display_total_price(self, obj):
-        val = getattr(obj, "total_price", None)
-        return _format_currency(val) if val is not None else "n/a"
+        value = getattr(obj, "total_price", None)
+        return _format_currency(value) if value is not None else "n/a"
 
 
-# ---------------------------------
+# -------------------------------------------------------------------
 # ORDER ADMIN
-# ---------------------------------
+# -------------------------------------------------------------------
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
-    list_display = ("job_ref", "name", "client", "printer", "status", "created_at", "display_total_price")
+    list_display = (
+        "job_ref",
+        "name",
+        "client",
+        "printer",
+        "status",
+        "created_at",
+        "display_total_price",
+    )
     list_filter = ("status", "printer", "client")
     search_fields = ("job_ref", "name", "client__email", "printer__name")
     ordering = ("-created_at",)
@@ -104,9 +112,9 @@ class OrderAdmin(admin.ModelAdmin):
         return _format_currency(total)
 
 
-# ---------------------------------
+# -------------------------------------------------------------------
 # JOB DELIVERABLE ADMIN
-# ---------------------------------
+# -------------------------------------------------------------------
 @admin.register(JobDeliverable)
 class JobDeliverableAdmin(admin.ModelAdmin):
     list_display = ("name", "order", "quantity", "is_booklet", "display_total_price")
@@ -119,9 +127,9 @@ class JobDeliverableAdmin(admin.ModelAdmin):
     fieldsets = (
         ("Core Details", {"fields": ("order", "name", "quantity", "size")}),
         ("Pricing", {"fields": ("total_price", "display_total_price", "display_production_summary")}),
-        ("Primary Specs", {"fields": ("machine", "material", "sidedness")}),
+        ("Primary Specs", {"fields": ("machine", "material", "sides")}),
         ("Booklet Specs", {"classes": ("collapse",), "fields": ("is_booklet", "page_count", "binding")}),
-        ("Cover Specs", {"classes": ("collapse",), "fields": ("cover_machine", "cover_material", "cover_sidedness")}),
+        ("Cover Specs", {"classes": ("collapse",), "fields": ("cover_machine", "cover_material", "cover_sides")}),
         ("Imposition Settings", {"classes": ("collapse",), "fields": ("bleed_mm", "gutter_mm", "gripper_mm")}),
     )
 
@@ -131,16 +139,15 @@ class JobDeliverableAdmin(admin.ModelAdmin):
 
     @admin.display(description="Production Summary")
     def display_production_summary(self, obj):
+        from engine.services.summaries import deliverable_summary
         try:
-            from engine.services.summaries import deliverable_summary
             return deliverable_summary(obj)
         except Exception:
             return "-"
 
     def save_model(self, request, obj, form, change):
         """
-        Trigger full price recalculation (print + finishing)
-        when saving a deliverable.
+        Recalculate total price on save.
         """
         try:
             obj.total_price = obj.calculate_price()

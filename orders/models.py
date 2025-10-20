@@ -1,6 +1,4 @@
-#orders/models.py
 import uuid
-import math
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.conf import settings
@@ -8,20 +6,15 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.core.validators import MinValueValidator
 
-from machines.models import FinishingService, Machine, MachineType
-from papers.models import FinalPaperSize, PaperType, ProductionPaperSize
-from engine.services import costs, impositions, summaries
-
-
-DECIMAL_QUANT = Decimal("0.01")
+from machines.models import Machine
+from papers.models import FinalPaperSize, PaperType
+# Note: ProductionPaperSize was imported but unused — removed for clarity
 
 
 # -------------------------------------------------------------------
-# ORDER
+# ORDER MODEL
 # -------------------------------------------------------------------
 class Order(models.Model):
-    """Top-level order. Holds metadata and aggregates deliverables."""
-
     class Status(models.TextChoices):
         PENDING_QUOTE = "pending_quote", _("Pending Quote")
         QUOTE_SENT = "quote_sent", _("Quote Sent")
@@ -49,14 +42,12 @@ class Order(models.Model):
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING_QUOTE)
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
-
-    # Optional quoted price
     instant_quote_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
 
     class Meta:
         ordering = ["-created_at"]
-        verbose_name = _("order")
-        verbose_name_plural = _("orders")
+        verbose_name = _("Order")
+        verbose_name_plural = _("Orders")
 
     def save(self, *args, **kwargs):
         if not self.job_ref:
@@ -67,9 +58,8 @@ class Order(models.Model):
         return f"{self.job_ref} — {self.name} ({self.get_status_display()})"
 
     def total_price(self) -> Decimal:
-        """Sum of all deliverable totals, quantized to 2 decimals."""
         total = sum((d.total_price for d in self.deliverables.all()), Decimal("0.00"))
-        return total.quantize(DECIMAL_QUANT, rounding=ROUND_HALF_UP)
+        return total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 # -------------------------------------------------------------------
@@ -95,33 +85,64 @@ class JobDeliverable(models.Model):
         INNER = "inner", _("Inner pages only")
         WHOLE = "whole", _("Entire product")
 
-    applies_to = models.CharField(
-        max_length=8,
-        choices=AppliesTo.choices,
-        default=AppliesTo.WHOLE
-    )
+    applies_to = models.CharField(max_length=8, choices=AppliesTo.choices, default=AppliesTo.WHOLE)
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="deliverables")
     name = models.CharField(max_length=120, help_text=_("e.g., 'Book – Title XYZ'"))
     slug = models.SlugField(_("slug"), max_length=255, blank=True, unique=True, db_index=True)
     quantity = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
     size = models.ForeignKey(FinalPaperSize, on_delete=models.PROTECT, related_name="deliverables")
-    
-    machine = models.ForeignKey(Machine, on_delete=models.PROTECT, related_name="job_deliverables", limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},)
-    material = models.ForeignKey(PaperType, on_delete=models.PROTECT, related_name="deliverables", help_text=_("The paper stock this pricing applies to."),)
+
+    machine = models.ForeignKey(
+        Machine,
+        on_delete=models.PROTECT,
+        related_name="job_deliverables",
+        limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},
+    )
+    material = models.ForeignKey(
+        PaperType,
+        on_delete=models.PROTECT,
+        related_name="deliverables",
+        help_text=_("The paper stock this pricing applies to."),
+    )
     sides = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.DOUBLE)
     is_booklet = models.BooleanField(default=False)
-    cover_machine = models.ForeignKey( Machine, null=True, blank=True, on_delete=models.PROTECT, related_name="cover_job_deliverables", limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},)
-    cover_material = models.ForeignKey( PaperType, null=True, blank=True, on_delete=models.PROTECT, related_name="cover_job_deliverables",)
+
+    cover_machine = models.ForeignKey(
+        Machine,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="cover_job_deliverables",
+        limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},
+    )
+    cover_material = models.ForeignKey(
+        PaperType,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="cover_job_deliverables",
+    )
     cover_sides = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.SINGLE)
-    page_count = models.PositiveIntegerField(default=1, help_text=_("Total pages including cover if booklet"))
-    sets = models.PositiveIntegerField(default=1)   # useful for per-set finishing like cutting
+    page_count = models.PositiveIntegerField(default=1)
+    sets = models.PositiveIntegerField(default=1)
 
     binding = models.CharField(max_length=12, choices=BindingType.choices, default=BindingType.NONE)
-    finishings = models.ManyToManyField(FinishingService, through="orders.DeliverableFinishing", blank=True, related_name="deliverables" )
-    
-    sheets_needed = models.PositiveIntegerField(default=0) #useful to determine number of sheet needed after getting the total items required
+    finishings = models.ManyToManyField(
+        Machine,
+        through="orders.DeliverableFinishing",
+        blank=True,
+        related_name="deliverables",
+    )
+
+    sheets_needed = models.PositiveIntegerField(default=0)
     total_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    source_template = models.ForeignKey("products.ProductTemplate", on_delete=models.SET_NULL, null=True, blank=True, related_name="deliverables", help_text=_("The product template this deliverable is based on, if any."),)
+    source_template = models.ForeignKey(
+        "products.ProductTemplate",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="deliverables",
+    )
 
     bleed_mm = models.PositiveIntegerField(default=3)
     gutter_mm = models.PositiveIntegerField(default=2)
@@ -132,24 +153,19 @@ class JobDeliverable(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
-        verbose_name = _("job deliverable")
-        verbose_name_plural = _("job deliverables")
+        verbose_name = _("Job Deliverable")
+        verbose_name_plural = _("Job Deliverables")
 
     def __str__(self):
         return f"{self.name} x{self.quantity}"
 
-    # -------------------------------------------------------------------
-    # SUMMARY + COST DELEGATION
-    # -------------------------------------------------------------------
     def production_summary(self) -> str:
         """Readable production + cost summary."""
         from engine.services import summaries
         return summaries.deliverable_summary(self)
 
     def calculate_price(self) -> Decimal:
-        """
-        Delegates all cost computation to the engine.services.costs module.
-        """
+        """Delegates all cost computation to the pricing engine."""
         from engine.services.costs import compute_total_cost
         try:
             result = compute_total_cost(self)
@@ -158,37 +174,47 @@ class JobDeliverable(models.Model):
             return Decimal("0.00")
 
     def save(self, *args, **kwargs):
-        """
-        Overrides save() to auto-calculate and store total_price.
-        """
+        """Auto-calculate and store total price."""
         from engine.services.costs import compute_total_cost
         try:
             result = compute_total_cost(self)
             self.total_price = result.get("total_cost", Decimal("0.00"))
         except Exception:
-            # fallback to manual calc
-            try:
-                self.total_price = self.calculate_price()
-            except Exception:
-                self.total_price = Decimal("0.00")
-
+            self.total_price = self.calculate_price()
         super().save(*args, **kwargs)
+
 
 # -------------------------------------------------------------------
 # DELIVERABLE FINISHINGS
 # -------------------------------------------------------------------
-
-# orders/models.py (new)
 class DeliverableFinishing(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    deliverable = models.ForeignKey("orders.JobDeliverable", on_delete=models.CASCADE, related_name="deliverable_finishings")
-    service = models.ForeignKey("machines.FinishingService", on_delete=models.CASCADE, related_name="deliverable_links")
-    applies_to = models.CharField(max_length=8, choices=JobDeliverable.AppliesTo.choices, default=JobDeliverable.AppliesTo.WHOLE)
-    quantity = models.PositiveIntegerField(null=True, blank=True,
-                                           help_text="Optional override quantity for the finishing calculation.")
+    deliverable = models.ForeignKey(
+        "orders.JobDeliverable",
+        on_delete=models.CASCADE,
+        related_name="deliverable_finishings"
+    )
+    service = models.ForeignKey(
+        "machines.Machine",
+        on_delete=models.CASCADE,
+        related_name="deliverable_links"
+    )
+    applies_to = models.CharField(
+        max_length=8,
+        choices=JobDeliverable.AppliesTo.choices,
+        default=JobDeliverable.AppliesTo.WHOLE
+    )
+    quantity = models.PositiveIntegerField(null=True, blank=True)
     unit_price_override = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     notes = models.CharField(max_length=255, blank=True)
 
     class Meta:
-        unique_together = ("deliverable", "service", "applies_to")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["deliverable", "service", "applies_to"],
+                name="unique_finishing_per_deliverable_service"
+            )
+        ]
 
+    def __str__(self):
+        return f"{self.service.name} for {self.deliverable.name}"

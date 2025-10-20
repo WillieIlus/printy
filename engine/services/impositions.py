@@ -1,15 +1,19 @@
-#services/impositions.py
 from decimal import Decimal
 from math import floor, ceil
 from typing import Optional
 
-from papers.models import ProductionPaperSize  # This is safe because it’s not circular
+# Safe import (not circular)
+from papers.models import ProductionPaperSize
+
 
 # -------------------------------------------------------------------
 # UTILITIES
 # -------------------------------------------------------------------
 def _to_decimal(v) -> Decimal:
-    """Convert numeric-like input to Decimal safely."""
+    """
+    Convert numeric-like input to Decimal safely.
+    Ensures consistent precision across calculations.
+    """
     if isinstance(v, Decimal):
         return v
     try:
@@ -31,6 +35,7 @@ def grid_count(
 ) -> int:
     """
     Calculate how many items fit within a given sheet area, considering gutter spacing.
+    Supports optional rotation to maximize fit.
     """
 
     def fit(w, h, iw, ih, g):
@@ -57,12 +62,17 @@ def items_per_sheet(
     gutter_mm: Decimal = Decimal("0"),
     allow_rotation: bool = True,
 ) -> int:
-    """Compute how many finished items can be imposed on one production sheet."""
+    """
+    Compute how many finished items can be imposed on one production sheet.
+    Accounts for bleed on all sides, gutter between copies,
+    and optional rotation of the item to maximize fit.
+    """
     sheet_w = _to_decimal(sheet_w_mm)
     sheet_h = _to_decimal(sheet_h_mm)
     item_w = _to_decimal(item_w_mm) + (bleed_mm * 2)
     item_h = _to_decimal(item_h_mm) + (bleed_mm * 2)
     gutter = _to_decimal(gutter_mm)
+
     return grid_count(sheet_w, sheet_h, item_w, item_h, gutter, allow_rotation)
 
 
@@ -70,7 +80,10 @@ def items_per_sheet(
 # SHEETS NEEDED
 # -------------------------------------------------------------------
 def sheets_needed(quantity: int, items_per_sheet: int) -> int:
-    """Return number of sheets required to print `quantity` items given `items_per_sheet`."""
+    """
+    Return number of sheets required to print `quantity` items
+    given how many fit on a single sheet.
+    """
     if items_per_sheet <= 0:
         items_per_sheet = 1
     return ceil(quantity / items_per_sheet)
@@ -84,7 +97,10 @@ def booklet_imposition(
     page_count: int,
     allow_rotation: bool = False,
 ) -> int:
-    """Calculate total inner sheets needed for a booklet."""
+    """
+    Calculate total inner sheets needed for a booklet.
+    Adjusts page count to the nearest multiple of 4.
+    """
     if page_count % 4 != 0:
         page_count += (4 - (page_count % 4))
     if page_count <= 4:
@@ -95,14 +111,16 @@ def booklet_imposition(
 
 
 # -------------------------------------------------------------------
-# JOB SHORTCUTS — LAZY IMPORT FIX 👇
+# JOB SHORTCUTS — INNER PAGES
 # -------------------------------------------------------------------
-def get_job_items_per_sheet(job):
+def get_job_items_per_sheet(job) -> int:
     """
-    Shortcut to calculate imposition for a deliverable using its own attributes.
-    Lazy import avoids circular dependency.
+    Shortcut to calculate imposition for a JobDeliverable's inner pages.
+    Uses the job's own paper size, final size, bleed, and gutter.
     """
-    from orders.models import JobDeliverable  # lazy import
+    from orders.models import JobDeliverable  # noqa: F401
+
+    # The material determines the parent sheet size
     sheet = job.material.size
     final_size = job.size
 
@@ -117,8 +135,49 @@ def get_job_items_per_sheet(job):
     )
 
 
-def get_job_sheets_needed(job):
-    """Shortcut for total sheets required for a flat job deliverable."""
-    from orders.models import JobDeliverable  # lazy import
+def get_job_sheets_needed(job) -> int:
+    """
+    Shortcut to compute total sheets required for a flat inner job deliverable.
+    For booklets, use `booklet_imposition` separately.
+    """
+    from orders.models import JobDeliverable  # noqa: F401
     ips = get_job_items_per_sheet(job)
+    return sheets_needed(job.quantity, ips)
+
+
+# -------------------------------------------------------------------
+# JOB SHORTCUTS — COVER PAGES
+# -------------------------------------------------------------------
+def get_cover_items_per_sheet(job) -> Optional[int]:
+    """
+    Calculates imposition for cover pages if a different cover machine/material is set.
+    Returns None if no cover machine/material is defined.
+    """
+    from orders.models import JobDeliverable  # noqa: F401
+
+    if not job.cover_machine or not job.cover_material:
+        return None
+
+    sheet = job.cover_material.size
+    final_size = job.size
+
+    return items_per_sheet(
+        sheet_w_mm=sheet.width_mm,
+        sheet_h_mm=sheet.height_mm,
+        item_w_mm=final_size.width_mm,
+        item_h_mm=final_size.height_mm,
+        bleed_mm=_to_decimal(job.bleed_mm),
+        gutter_mm=_to_decimal(job.gutter_mm),
+        allow_rotation=True,
+    )
+
+
+def get_cover_sheets_needed(job) -> Optional[int]:
+    """
+    Shortcut to compute total sheets required for cover printing,
+    if cover machine/material exists.
+    """
+    ips = get_cover_items_per_sheet(job)
+    if ips is None:
+        return None
     return sheets_needed(job.quantity, ips)
