@@ -1,76 +1,77 @@
 from decimal import Decimal, ROUND_HALF_UP
 from django.contrib import admin
+from django.utils.translation import gettext_lazy as _
+
 from .models import Order, JobDeliverable, DeliverableFinishing
 
 
 # -------------------------------------------------------------------
 # HELPER — Currency Formatter
 # -------------------------------------------------------------------
-def _format_currency(amount: Decimal, currency: str = "KES") -> str:
-    """
-    Formats a Decimal amount as currency (e.g., KES 1,234.00).
-    """
+def _format_currency(amount: Decimal | None, currency: str = "KES") -> str:
+    """Format Decimal as currency (e.g., 'KES 1,234.00')."""
+    if amount is None:
+        return f"{currency} 0.00"
     try:
-        value = (Decimal(amount or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        value = Decimal(amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         return f"{currency} {value:,}"
     except Exception:
         return f"{currency} 0.00"
 
 
 # -------------------------------------------------------------------
-# INLINE — Finishing per Deliverable
+# INLINE — Deliverable Finishing
 # -------------------------------------------------------------------
 class DeliverableFinishingInline(admin.StackedInline):
     model = DeliverableFinishing
-    autocomplete_fields = ("service",)
-    raw_id_fields = ("deliverable",)
+    autocomplete_fields = ("machine",)
     extra = 1
 
     fields = (
-        "deliverable",
-        "service",
+        "machine",
         "applies_to",
         "quantity",
         "unit_price_override",
         "notes",
     )
 
-    def save_model(self, request, obj, form, change):
-        """
-        Recalculate finishing cost on save (if applicable).
-        """
+    @admin.display(description="Calculated Price (KES)")
+    def display_price(self, obj):
         try:
-            obj.calculate_price()
+            if hasattr(obj, "calculate_price"):
+                price = obj.calculate_price()
+                return _format_currency(price)
         except Exception:
             pass
-        super().save_model(request, obj, form, change)
+        return "–"
+
+    readonly_fields = ("display_price",)
 
 
 # -------------------------------------------------------------------
-# INLINE — Deliverables inside Order
+# INLINE — Job Deliverables in Order
 # -------------------------------------------------------------------
 class JobDeliverableInline(admin.TabularInline):
     model = JobDeliverable
-    fields = ("name", "quantity", "size", "display_production_summary", "display_total_price")
-    readonly_fields = ("name", "size", "display_production_summary", "display_total_price")
+    fields = ("name", "quantity", "size", "display_total_price", "display_summary")
+    readonly_fields = ("display_total_price", "display_summary")
     show_change_link = True
     extra = 0
 
     def has_add_permission(self, request, obj=None):
         return False
 
+    @admin.display(description="Total Price")
+    def display_total_price(self, obj):
+        return _format_currency(getattr(obj, "total_price", Decimal("0.00")))
+
     @admin.display(description="Production Summary")
-    def display_production_summary(self, obj):
+    def display_summary(self, obj):
         from engine.services.summaries import deliverable_summary
         try:
             return deliverable_summary(obj)
         except Exception:
-            return "-"
-
-    @admin.display(description="Total Price")
-    def display_total_price(self, obj):
-        value = getattr(obj, "total_price", None)
-        return _format_currency(value) if value is not None else "n/a"
+            return "–"
 
 
 # -------------------------------------------------------------------
@@ -96,20 +97,18 @@ class OrderAdmin(admin.ModelAdmin):
 
     fieldsets = (
         (None, {"fields": ("job_ref", "name", "status")}),
-        ("Parties Involved", {"fields": ("client", "printer")}),
-        ("Pricing & Notes", {"fields": ("display_total_price", "notes")}),
-        ("Timestamps", {"fields": ("created_at",)}),
+        (_("Parties"), {"fields": ("client", "printer")}),
+        (_("Notes & Pricing"), {"fields": ("notes", "display_total_price")}),
+        (_("Timestamps"), {"fields": ("created_at",)}),
     )
 
     @admin.display(description="Total Price")
     def display_total_price(self, obj):
-        total = Decimal("0.00")
         try:
-            for d in obj.deliverables.all():
-                total += d.total_price or Decimal("0.00")
+            total = obj.total_price()
+            return _format_currency(total)
         except Exception:
-            return "n/a"
-        return _format_currency(total)
+            return "–"
 
 
 # -------------------------------------------------------------------
@@ -117,20 +116,17 @@ class OrderAdmin(admin.ModelAdmin):
 # -------------------------------------------------------------------
 @admin.register(JobDeliverable)
 class JobDeliverableAdmin(admin.ModelAdmin):
-    list_display = ("name", "order", "quantity", "is_booklet", "display_total_price")
-    list_filter = ("order__printer", "is_booklet", "size")
+    list_display = ("name", "order", "quantity", "binding", "sides", "display_total_price")
+    list_filter = ("order__printer", "binding", "sides", "size")
     search_fields = ("name", "order__job_ref", "order__name")
-    readonly_fields = ("total_price", "display_total_price", "display_production_summary")
-    autocomplete_fields = ("order", "size", "cover_machine", "cover_material", "machine", "material")
+    readonly_fields = ("total_price", "display_total_price", "display_summary")
+    autocomplete_fields = ("order", "size", "materials", "machines", "finishings")
     inlines = [DeliverableFinishingInline]
 
     fieldsets = (
-        ("Core Details", {"fields": ("order", "name", "quantity", "size")}),
-        ("Pricing", {"fields": ("total_price", "display_total_price", "display_production_summary")}),
-        ("Primary Specs", {"fields": ("machine", "material", "sides")}),
-        ("Booklet Specs", {"classes": ("collapse",), "fields": ("is_booklet", "page_count", "binding")}),
-        ("Cover Specs", {"classes": ("collapse",), "fields": ("cover_machine", "cover_material", "cover_sides")}),
-        ("Imposition Settings", {"classes": ("collapse",), "fields": ("bleed_mm", "gutter_mm", "gripper_mm")}),
+        ("Core Details", {"fields": ("order", "name", "quantity", "size", "binding", "sides")}),
+        ("Pricing", {"fields": ("total_price", "display_total_price")}),
+        ("Summary", {"fields": ("display_summary",)}),
     )
 
     @admin.display(description="Total Price")
@@ -138,19 +134,18 @@ class JobDeliverableAdmin(admin.ModelAdmin):
         return _format_currency(getattr(obj, "total_price", Decimal("0.00")))
 
     @admin.display(description="Production Summary")
-    def display_production_summary(self, obj):
+    def display_summary(self, obj):
         from engine.services.summaries import deliverable_summary
         try:
             return deliverable_summary(obj)
         except Exception:
-            return "-"
+            return "–"
 
     def save_model(self, request, obj, form, change):
-        """
-        Recalculate total price on save.
-        """
+        """Recalculate total price before saving."""
         try:
-            obj.total_price = obj.calculate_price()
+            if hasattr(obj, "calculate_price"):
+                obj.total_price = obj.calculate_price()
         except Exception:
             pass
         super().save_model(request, obj, form, change)

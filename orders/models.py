@@ -8,7 +8,6 @@ from django.core.validators import MinValueValidator
 
 from machines.models import Machine
 from papers.models import FinalPaperSize, PaperType
-# Note: ProductionPaperSize was imported but unused — removed for clarity
 
 
 # -------------------------------------------------------------------
@@ -85,68 +84,37 @@ class JobDeliverable(models.Model):
         INNER = "inner", _("Inner pages only")
         WHOLE = "whole", _("Entire product")
 
-    applies_to = models.CharField(max_length=8, choices=AppliesTo.choices, default=AppliesTo.WHOLE)
-    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="deliverables")
-    name = models.CharField(max_length=120, help_text=_("e.g., 'Book – Title XYZ'"))
-    slug = models.SlugField(_("slug"), max_length=255, blank=True, unique=True, db_index=True)
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    order = models.ForeignKey("orders.Order", on_delete=models.CASCADE, related_name="deliverables")
+
+    name = models.CharField(max_length=120)
+    slug = models.SlugField(max_length=255, blank=True, unique=True)
     quantity = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
-    size = models.ForeignKey(FinalPaperSize, on_delete=models.PROTECT, related_name="deliverables")
-
-    machine = models.ForeignKey(
-        Machine,
-        on_delete=models.PROTECT,
-        related_name="job_deliverables",
-        limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},
-    )
-    material = models.ForeignKey(
-        PaperType,
-        on_delete=models.PROTECT,
-        related_name="deliverables",
-        help_text=_("The paper stock this pricing applies to."),
-    )
-    sides = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.DOUBLE)
-    is_booklet = models.BooleanField(default=False)
-
-    cover_machine = models.ForeignKey(
-        Machine,
-        null=True,
-        blank=True,
-        on_delete=models.PROTECT,
-        related_name="cover_job_deliverables",
-        limit_choices_to={"machine_type__in": ["DIGITAL", "UV_FLA", "LARGE_FORMAT"]},
-    )
-    cover_material = models.ForeignKey(
-        PaperType,
-        null=True,
-        blank=True,
-        on_delete=models.PROTECT,
-        related_name="cover_job_deliverables",
-    )
-    cover_sides = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.SINGLE)
     page_count = models.PositiveIntegerField(default=1)
     sets = models.PositiveIntegerField(default=1)
-
     binding = models.CharField(max_length=12, choices=BindingType.choices, default=BindingType.NONE)
+    sides = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.DOUBLE)
+    size = models.ForeignKey(FinalPaperSize, on_delete=models.PROTECT)
+
+    # Flexible many-to-many relationships with through models
+    materials = models.ManyToManyField(
+        PaperType,
+        through="orders.DeliverableMaterial",
+        related_name="deliverables",
+    )
+    machines = models.ManyToManyField(
+        Machine,
+        through="orders.DeliverableMachine",
+        related_name="deliverables",
+    )
     finishings = models.ManyToManyField(
         Machine,
         through="orders.DeliverableFinishing",
+        related_name="finishing_jobs",
         blank=True,
-        related_name="deliverables",
     )
 
-    sheets_needed = models.PositiveIntegerField(default=0)
     total_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    source_template = models.ForeignKey(
-        "products.ProductTemplate",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="deliverables",
-    )
-
-    bleed_mm = models.PositiveIntegerField(default=3)
-    gutter_mm = models.PositiveIntegerField(default=2)
-    gripper_mm = models.PositiveIntegerField(default=3)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     notes = models.CharField(max_length=255, blank=True)
@@ -159,13 +127,7 @@ class JobDeliverable(models.Model):
     def __str__(self):
         return f"{self.name} x{self.quantity}"
 
-    def production_summary(self) -> str:
-        """Readable production + cost summary."""
-        from engine.services import summaries
-        return summaries.deliverable_summary(self)
-
     def calculate_price(self) -> Decimal:
-        """Delegates all cost computation to the pricing engine."""
         from engine.services.costs import compute_total_cost
         try:
             result = compute_total_cost(self)
@@ -174,7 +136,6 @@ class JobDeliverable(models.Model):
             return Decimal("0.00")
 
     def save(self, *args, **kwargs):
-        """Auto-calculate and store total price."""
         from engine.services.costs import compute_total_cost
         try:
             result = compute_total_cost(self)
@@ -185,36 +146,71 @@ class JobDeliverable(models.Model):
 
 
 # -------------------------------------------------------------------
-# DELIVERABLE FINISHINGS
+# DELIVERABLE MATERIAL
 # -------------------------------------------------------------------
-class DeliverableFinishing(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    deliverable = models.ForeignKey(
-        "orders.JobDeliverable",
-        on_delete=models.CASCADE,
-        related_name="deliverable_finishings"
-    )
-    service = models.ForeignKey(
-        "machines.Machine",
-        on_delete=models.CASCADE,
-        related_name="deliverable_links"
-    )
+class DeliverableMaterial(models.Model):
+    deliverable = models.ForeignKey("orders.JobDeliverable", on_delete=models.CASCADE)
+    material = models.ForeignKey("papers.PaperType", on_delete=models.PROTECT)
     applies_to = models.CharField(
         max_length=8,
         choices=JobDeliverable.AppliesTo.choices,
-        default=JobDeliverable.AppliesTo.WHOLE
+        default=JobDeliverable.AppliesTo.WHOLE,
+    )
+    sides = models.CharField(max_length=2, choices=Sidedness.choices, default=Sidedness.SINGLE)
+    sheet_count = models.PositiveIntegerField(default=0)
+    unit_price_override = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+
+    class Meta:
+        unique_together = ("deliverable", "material", "applies_to")
+        verbose_name = _("Deliverable Material")
+        verbose_name_plural = _("Deliverable Materials")
+
+    def __str__(self):
+        return f"{self.material.name} ({self.get_applies_to_display()})"
+
+
+# -------------------------------------------------------------------
+# DELIVERABLE MACHINE
+# -------------------------------------------------------------------
+class DeliverableMachine(models.Model):
+    deliverable = models.ForeignKey("orders.JobDeliverable", on_delete=models.CASCADE)
+    machine = models.ForeignKey("machines.Machine", on_delete=models.PROTECT)
+    applies_to = models.CharField(
+        max_length=8,
+        choices=JobDeliverable.AppliesTo.choices,
+        default=JobDeliverable.AppliesTo.WHOLE,
+    )
+    usage_minutes = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    setup_cost_override = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+
+    class Meta:
+        unique_together = ("deliverable", "machine", "applies_to")
+        verbose_name = _("Deliverable Machine")
+        verbose_name_plural = _("Deliverable Machines")
+
+    def __str__(self):
+        return f"{self.machine.name} ({self.get_applies_to_display()})"
+
+
+# -------------------------------------------------------------------
+# DELIVERABLE FINISHINGS
+# -------------------------------------------------------------------
+class DeliverableFinishing(models.Model):
+    deliverable = models.ForeignKey("orders.JobDeliverable", on_delete=models.CASCADE)
+    machine = models.ForeignKey("machines.Machine", on_delete=models.PROTECT)
+    applies_to = models.CharField(
+        max_length=8,
+        choices=JobDeliverable.AppliesTo.choices,
+        default=JobDeliverable.AppliesTo.WHOLE,
     )
     quantity = models.PositiveIntegerField(null=True, blank=True)
     unit_price_override = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     notes = models.CharField(max_length=255, blank=True)
 
     class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=["deliverable", "service", "applies_to"],
-                name="unique_finishing_per_deliverable_service"
-            )
-        ]
+        unique_together = ("deliverable", "machine", "applies_to")
+        verbose_name = _("Deliverable Finishing")
+        verbose_name_plural = _("Deliverable Finishings")
 
     def __str__(self):
-        return f"{self.service.name} for {self.deliverable.name}"
+        return f"{self.machine.name} ({self.get_applies_to_display()})"
