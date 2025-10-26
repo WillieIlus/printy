@@ -20,8 +20,30 @@ def _format_currency(amount: Decimal | None, currency: str = "KES") -> str:
 
 
 # -------------------------------------------------------------------
+# INLINE — Deliverable Material
+# -------------------------------------------------------------------
+class DeliverableMaterialInline(admin.TabularInline):
+    model = JobDeliverable.materials.through
+    extra = 1
+    autocomplete_fields = ("material",)
+    fields = ("material", "applies_to", "sides", "sheet_count", "unit_price_override")
+    readonly_fields = ()
+
+# -------------------------------------------------------------------
+# INLINE — Deliverable Machine
+# -------------------------------------------------------------------
+class DeliverableMachineInline(admin.TabularInline):
+    model = JobDeliverable.machines.through
+    extra = 1
+    autocomplete_fields = ("machine",)
+    fields = ("machine", "applies_to", "usage_minutes", "setup_cost_override")
+    readonly_fields = ()
+
+
+# -------------------------------------------------------------------
 # INLINE — Deliverable Finishing
 # -------------------------------------------------------------------
+
 class DeliverableFinishingInline(admin.StackedInline):
     model = DeliverableFinishing
     autocomplete_fields = ("machine",)
@@ -121,10 +143,9 @@ class JobDeliverableAdmin(admin.ModelAdmin):
     search_fields = ("name", "order__job_ref", "order__name")
     readonly_fields = ("total_price", "display_total_price", "display_summary")
     autocomplete_fields = ("order", "size", "materials", "machines", "finishings")
-    inlines = [DeliverableFinishingInline]
-
+    inlines = [DeliverableMaterialInline, DeliverableMachineInline, DeliverableFinishingInline]
     fieldsets = (
-        ("Core Details", {"fields": ("order", "name", "quantity", "size", "binding", "sides")}),
+        ("Core Details", {"fields": ("order", "name", "quantity", "size", "binding", "sides", "page_count",  "notes")}),
         ("Pricing", {"fields": ("total_price", "display_total_price")}),
         ("Summary", {"fields": ("display_summary",)}),
     )

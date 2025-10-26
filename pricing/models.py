@@ -14,6 +14,7 @@ from django.db.models import Q
 # -------------------------------------------------------------------
 # DIGITAL PRINT PRICE
 # -------------------------------------------------------------------
+
 class DigitalPrintPrice(models.Model):
     """
     Holds single- and double-sided print prices for a given paper type
@@ -97,7 +98,7 @@ class LargeFormatPrintPrice(models.Model):
         related_name="large_format_prices",
         limit_choices_to={"machine_type": MachineType.LARGE_FORMAT},
     )
-    material = models.ForeignKey("papers.LargeFormatMaterial", on_delete=models.CASCADE, related_name="prices")
+    material = models.ForeignKey("papers.LargeFormatMaterial", on_delete=models.CASCADE, related_name="large_format_material_prices")
 
     roll_width_m = models.DecimalField(max_digits=5, decimal_places=2)
     price_per_sq_meter = models.DecimalField(max_digits=10, decimal_places=2)
@@ -124,8 +125,8 @@ class OffsetPlatePrice(models.Model):
     One-time setup cost per plate for offset printing.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name="offset_plate_prices")
-    machine = models.ForeignKey(Machine, on_delete=models.CASCADE, related_name="digital_prices")
+    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name="offset_plate_prices_company")
+    machine = models.ForeignKey(Machine, on_delete=models.CASCADE, related_name="offset_plate_prices_machine")
     name = models.CharField(max_length=100)
     setup_cost = models.DecimalField(max_digits=10, decimal_places=2)
 
@@ -141,14 +142,14 @@ class OffsetRunPrice(models.Model):
     Per-sheet running cost for a given paper type on a specific offset press.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name="offset_run_prices")
+    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name="offset_run_prices_company")
     machine = models.ForeignKey(
         Machine,
         on_delete=models.CASCADE,
-        related_name="offset_run_prices",
+        related_name="offset_run_prices_machine",
         limit_choices_to={"machine_type": MachineType.OFFSET},
     )
-    paper_type = models.ForeignKey(PaperType, on_delete=models.CASCADE, related_name="offset_run_prices")
+    paper_type = models.ForeignKey(PaperType, on_delete=models.CASCADE, related_name="offset_run_prices_paper_type")
 
     price_per_sheet_per_color = models.DecimalField(max_digits=10, decimal_places=4)
     currency = models.CharField(max_length=10, default="KES")
@@ -174,8 +175,8 @@ class ScreenSetupPrice(models.Model):
     One-time cost to create a screen (per color).
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name="screen_setup_prices")
-    machine = models.ForeignKey(Machine, on_delete=models.CASCADE, related_name="digital_prices")
+    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name="screen_setup_prices_company")
+    machine = models.ForeignKey(Machine, on_delete=models.CASCADE, related_name="digital_prices_machine")
     name = models.CharField(max_length=100)
     setup_cost = models.DecimalField(max_digits=10, decimal_places=2)
 
@@ -191,7 +192,7 @@ class ScreenRunPrice(models.Model):
     Running cost per item for screen printing.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name="screen_run_prices")
+    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name="screen_run_prices_company")
     machine = models.ForeignKey(
         Machine,
         on_delete=models.CASCADE,
@@ -214,7 +215,7 @@ class UVDTFPrintPrice(models.Model):
     Defines UV DTF film and its price per square meter.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name="uvdtf_print_prices")
+    company = models.ForeignKey(PrintCompany, on_delete=models.CASCADE, related_name="uvdtf_print_prices_company")
     machine = models.ForeignKey(
         Machine,
         on_delete=models.CASCADE,
@@ -254,14 +255,14 @@ class TieredFinishingPrice(models.Model):
     machine = models.ForeignKey(
         Machine,
         on_delete=models.CASCADE,
-        related_name="tiered_finishing_prices",
+        related_name="tiered_finishing_prices_machine",
         verbose_name=_("Machine"),
     )
 
     service = models.ForeignKey(
         Machine,
         on_delete=models.CASCADE,
-        related_name="tiered_finishing_prices",
+        related_name="tiered_finishing_prices_service",
         verbose_name=_("Finishing Service"),
     )
 
@@ -330,20 +331,20 @@ class LaminationPrice(models.Model):
     company = models.ForeignKey(
         PrintCompany,
         on_delete=models.CASCADE,
-        related_name="lamination_prices",
+        related_name="lamination_prices_company",
         help_text=_("The company this pricing belongs to.")
     )
     machine = models.ForeignKey(
         Machine,
         on_delete=models.CASCADE,
-        related_name="lamination_prices",
+        related_name="lamination_prices_machine",
         limit_choices_to={"machine_type": MachineType.LAMINATOR},
         help_text=_("The laminator this pricing applies to.")
     )
     lamination_type = models.ForeignKey(
-        "papers.LaminationType",  # or PaperType if you already use it for lamination kinds
+        "papers.LaminationMaterial",  # or PaperType if you already use it for lamination kinds
         on_delete=models.CASCADE,
-        related_name="lamination_prices",
+        related_name="lamination_prices_lamination_type",
         help_text=_("Type of lamination material, e.g., matte, gloss, frost, velvet.")
     )
     size = models.ForeignKey(

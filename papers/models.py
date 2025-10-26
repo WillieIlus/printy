@@ -142,3 +142,48 @@ class UVDTFMaterial(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class LaminationMaterial(models.Model):
+    """
+    Represents lamination films used for finishing.
+    Example: Gloss, Matte, Velvet, Frost, Soft Touch, Anti-scratch, etc.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(_("name"), max_length=100, unique=True)
+    finish_type = models.CharField(
+        _("finish type"),
+        max_length=50,
+        choices=[
+            ("gloss", _("Gloss")),
+            ("matte", _("Matte")),
+            ("velvet", _("Velvet / Soft Touch")),
+            ("frost", _("Frost / Sand")),
+            ("anti_scratch", _("Anti-Scratch")),
+            ("other", _("Other")),
+        ],
+        default="matte",
+    )
+    thickness_microns = models.DecimalField(
+        _("thickness (microns)"),
+        max_digits=5,
+        decimal_places=2,
+        blank=True,
+        null=True,
+        help_text=_("Film thickness in microns (e.g. 25, 40, 75)."),
+    )
+    is_single_sided_only = models.BooleanField(
+        _("single-sided only"),
+        default=False,
+        help_text=_("True if this lamination can only be applied to one side."),
+    )
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        verbose_name = _("Lamination material")
+        verbose_name_plural = _("Lamination materials")
+        ordering = ["name"]
+
+    def __str__(self):
+        return f"{self.name} ({self.finish_type})"

@@ -105,7 +105,7 @@ class JobDeliverable(models.Model):
     machines = models.ManyToManyField(
         Machine,
         through="orders.DeliverableMachine",
-        related_name="deliverables",
+        related_name="deliverables_machines",
     )
     finishings = models.ManyToManyField(
         Machine,

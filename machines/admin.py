@@ -11,7 +11,6 @@ from pricing.models import (
     TieredFinishingPrice,
 )
 
-
 # -------------------------------------------------------------------
 # INLINE BASE — Common Style
 # -------------------------------------------------------------------
@@ -30,13 +29,17 @@ class BasePricingInline(admin.TabularInline):
 class DigitalPrintPriceInline(BasePricingInline):
     model = DigitalPrintPrice
     fields = (
+        "company",
+        "machine",
         "paper_type",
         "single_side_price",
         "double_side_price",
         "currency",
+        "size",
     )
-    autocomplete_fields = ("paper_type",)
+    autocomplete_fields = ("paper_type", "size",)
     verbose_name = "Digital Print Price"
+
 
 
 # -------------------------------------------------------------------
@@ -59,22 +62,22 @@ class LargeFormatPrintPriceInline(BasePricingInline):
 # -------------------------------------------------------------------
 class TieredFinishingPriceInline(BasePricingInline):
     model = TieredFinishingPrice
+    fk_name = "machine"  # Important: use correct FK
     fields = (
-        "finishing_type",
-        "paper_size",
-        "sidedness",
+        "machine",
+        "service",
         "min_quantity",
         "max_quantity",
-        "price",
-        "currency",
+        "unit_price",
+        "setup_fee",
     )
-    autocomplete_fields = ("paper_size",)
+    autocomplete_fields = ("machine", "service",)
     verbose_name = "Finishing Tier"
 
     def get_queryset(self, request):
         """Show only tiers linked to this machine."""
         qs = super().get_queryset(request)
-        return qs.select_related("machine", "paper_size")
+        return qs.select_related("machine", "service")
 
 
 # -------------------------------------------------------------------

@@ -1,9 +1,8 @@
 # engine/services/summaries.py
 from decimal import Decimal
 from typing import Optional
-from engine.services.impositions import items_per_sheet, get_job_sheets_needed
-from engine.services.costs import compute_total_cost
-from engine.services.finishing_costs import compute_finishing_cost
+from engine.services.impositions import items_per_sheet
+from engine.services.costs import compute_total_cost, compute_total_cost
 from machines.models import Machine
 
 
@@ -164,9 +163,9 @@ def deliverable_summary(deliverable) -> str:
             custom_data["sheet_count"] = qty_override
             custom_data["copy_count"] = qty_override
             custom_data["set_count"] = qty_override
-            fc = compute_finishing_cost(service, machine_used, custom_data)
+            fc = compute_total_cost(service, machine_used, custom_data)
         else:
-            fc = compute_finishing_cost(service, machine_used, job_data)
+            fc = compute_total_cost(service, machine_used, job_data)
 
         finishing_total += fc["total"]
         finishing_lines += (
